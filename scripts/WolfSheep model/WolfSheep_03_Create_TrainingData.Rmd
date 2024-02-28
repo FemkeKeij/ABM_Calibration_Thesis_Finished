@@ -1,0 +1,1258 @@
+---
+title: "WolfSheep_03_CreateTrainingData"
+author: "Femke Keij S2647168"
+date: "2023-07-12"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Clear working directory:
+```{r}
+rm(list = ls(all = TRUE)) 
+```
+
+Packages used:
+```{r}
+# for importing / working with tidy data
+library(tidyverse)
+
+# for arranging ggplots
+library(patchwork)
+
+# for computing trends in data
+library(trend)
+```
+
+Random seed:
+```{r}
+set.seed(42)
+```
+
+Read in the data:
+```{r}
+# complete data set
+ws_full_clean <- read_csv(
+  'data/processed/wolfsheep_full200.csv')
+
+# output data summary
+ws_summary_clean <- read_csv(
+  'data/processed/wolfsheep_summary200.csv')
+```
+
+# Mimic real-world data: introduce random noise
+ON THE OUTPUT:
+Noise is maximum 20% of the mean output value it is added to (such that smaller values can be as noisy as large ones). How much noise is added is determined by a N(0, 6). 
+```{r}
+# for the summarised data
+ws_summary_noise <- ws_summary_clean %>%
+  # per parameter combination
+  group_by(combination_number) %>%
+  # compute mean sheep, grass, wolves over full time series
+  mutate(mean_sheep = mean(sheep),
+         mean_wolves = mean(wolves),
+         mean_grass = mean(grass)) %>%
+  # add noise to each value of sheep, grass, and wolves
+  rowwise %>%
+  mutate(sheep_noise = sheep + mean_sheep *
+           rnorm(n = 1, mean = 0, sd = 6) / 100,
+         wolves_noise = wolves + mean_wolves *
+           rnorm(n = 1, mean = 0, sd = 6) / 100,
+         grass_noise = grass + mean_grass *
+           rnorm(n = 1, mean = 0, sd = 6) / 100) %>%
+  # add a correction for values < 0, since it's in this case not possible for values to be negative
+  mutate(sheep_noise = ifelse(sheep_noise < 0, 0, sheep_noise),
+         wolves_noise = ifelse(wolves_noise < 0, 0, wolves_noise),
+         grass_noise = ifelse(grass_noise < 0, 0, grass_noise))
+
+# for the full data
+ws_full_noise <- ws_full_clean %>%
+  # per parameter combination
+  group_by(combination_number, run) %>%
+  # compute mean sheep, grass, wolves over full time series
+  mutate(mean_sheep = mean(sheep),
+         mean_wolves = mean(wolves),
+         mean_grass = mean(grass)) %>%
+  # add noise to each value of sheep, grass, and wolves
+  rowwise %>%
+  mutate(sheep_noise = sheep + mean_sheep *
+           rnorm(n = 1, mean = 0, sd = 6) / 100,
+         wolves_noise = wolves + mean_wolves *
+           rnorm(n = 1, mean = 0, sd = 6) / 100,
+         grass_noise = grass + mean_grass *
+           rnorm(n = 1, mean = 0, sd = 6) / 100) %>%
+  # add a correction for values < 0, since it's in this case not possible for values to be negative
+  mutate(sheep_noise = ifelse(sheep_noise < 0, 0, sheep_noise),
+         wolves_noise = ifelse(wolves_noise < 0, 0, wolves_noise),
+         grass_noise = ifelse(grass_noise < 0, 0, grass_noise))
+```
+
+Check that the noise was added properly:
+```{r}
+# sheep
+p_sheep <- ws_summary_noise %>%
+  ggplot(mapping = aes(x = sheep, y = sheep_noise)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(intercept = 0, slope = 1,
+              colour = 'darkgreen', lty = 2) +
+  labs(x = 'sheep original', y = 'sheep noise') +
+  theme_minimal()
+
+# wolves
+p_wolves <- ws_summary_noise %>%
+  ggplot(mapping = aes(x = wolves, y = wolves_noise)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(intercept = 0, slope = 1,
+              colour = 'darkgreen', lty = 2) +
+  labs(x = 'wolves original', y = 'wolves noise') +
+  theme_minimal()
+
+# grass
+p_grass <- ws_summary_noise %>%
+  ggplot(mapping = aes(x = grass, y = grass_noise)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(intercept = 0, slope = 1,
+              colour = 'darkgreen', lty = 2) +
+  labs(x = 'grass original', y = 'grass noise') +
+  theme_minimal()
+
+p_sheep + p_wolves + p_grass
+```
+
+IN TIME:
+Time series are shifted by a maximum of 10 time steps. The amount of noise added is sampled randomly from (-10 ; 10).
+```{r}
+# for the summarised runs
+ws_summary_noise <- ws_summary_noise %>%
+  group_by(combination_number) %>%
+  mutate(ticks_noise = ticks + sample(-10:10, 1))
+
+# for the full data
+ws_full_noise <- ws_full_noise %>%
+  group_by(combination_number, run) %>%
+  mutate(ticks_noise = ticks + sample(-10:10, 1))
+```
+
+# Summarise data into time series
+Make the following summaries
+- End point values with mean, minimum, maximum, standard deviation, and trend of the output;
+- Output values every 10 time steps, as well as mean, minimum, maximum, standard deviation, and trend of the output;
+- Output values every 20 time steps, as well as mean, minimum, maximum, standard deviation, and trend of the output;
+- Output values every 50 time steps, as well as mean, minimum, maximum, standard deviation, and trend of the output;
+- Not summarised (the full time series is kept).
+For the summarised and non-summarised runs.
+
+```{r}
+TimeSeriesSummarising <- function(data, full = FALSE,
+                                  timesteps = TRUE){
+  
+  if(full){
+    data_return <- data %>%
+      # per parameter combination & run number
+      group_by(combination_number, run) %>%
+      # compute mean, min, max, sd, and trend
+      mutate(mean_sheep = mean(sheep),
+             mean_sheep_noise = mean(sheep_noise),
+             min_sheep = min(sheep),
+             min_sheep_noise = min(sheep_noise),
+             max_sheep = max(sheep),
+             max_sheep_noise = max(sheep_noise),
+             sd_sheep = sd(sheep),
+             sd_sheep_noise = sd(sheep_noise),
+             trend_sheep = sens.slope(sheep)$estimates,
+             trend_sheep_noise = sens.slope(sheep_noise)$estimates,
+             mean_wolves = mean(wolves),
+             mean_wolves_noise = mean(wolves_noise),
+             min_wolves = min(wolves),
+             min_wolves_noise = min(wolves_noise),
+             max_wolves = max(wolves),
+             max_wolves_noise = max(wolves_noise),
+             sd_wolves = sd(wolves),
+             sd_wolves_noise = sd(wolves_noise),
+             trend_wolves = sens.slope(wolves)$estimates,
+             trend_wolves_noise = sens.slope(wolves_noise)$estimates,
+             mean_grass = mean(grass),
+             mean_grass_noise = mean(grass_noise),
+             min_grass = min(grass),
+             min_grass_noise = min(grass_noise),
+             max_grass = max(grass),
+             max_grass_noise = max(grass_noise),
+             sd_grass = sd(grass),
+             sd_grass_noise = sd(grass_noise),
+             trend_grass = sens.slope(grass)$estimates,
+             tend_grass_noise = sens.slope(grass_noise)$estimates)
+  } else {
+    data_return <- data %>%
+      # per parameter combination
+      group_by(combination_number) %>%
+      # compute mean, min, max, sd, and trend
+      mutate(mean_sheep = mean(sheep),
+             mean_sheep_noise = mean(sheep_noise),
+             min_sheep = min(sheep),
+             min_sheep_noise = min(sheep_noise),
+             max_sheep = max(sheep),
+             max_sheep_noise = max(sheep_noise),
+             sd_sheep = sd(sheep),
+             sd_sheep_noise = sd(sheep_noise),
+             trend_sheep = sens.slope(sheep)$estimates,
+             trend_sheep_noise = sens.slope(sheep_noise)$estimates,
+             mean_wolves = mean(wolves),
+             mean_wolves_noise = mean(wolves_noise),
+             min_wolves = min(wolves),
+             min_wolves_noise = min(wolves_noise),
+             max_wolves = max(wolves),
+             max_wolves_noise = max(wolves_noise),
+             sd_wolves = sd(wolves),
+             sd_wolves_noise = sd(wolves_noise),
+             trend_wolves = sens.slope(wolves)$estimates,
+             trend_wolves_noise = sens.slope(wolves_noise)$estimates,
+             mean_grass = mean(grass),
+             mean_grass_noise = mean(grass_noise),
+             min_grass = min(grass),
+             min_grass_noise = min(grass_noise),
+             max_grass = max(grass),
+             max_grass_noise = max(grass_noise),
+             sd_grass = sd(grass),
+             sd_grass_noise = sd(grass_noise),
+             trend_grass = sens.slope(grass)$estimates,
+             tend_grass_noise = sens.slope(grass_noise)$estimates)
+  }
+  
+  if(timesteps){
+    data_return <- data_return %>%
+      filter(ticks %% 10 == 0 | ticks_noise %% 10 == 0)
+  } else {
+    if(full){
+      data_return <- data_return %>%
+        group_by(combination_number, run) %>%
+        filter(ticks == max(ticks))
+    } else {
+      data_return <- data_return %>%
+        group_by(combination_number) %>%
+        filter(ticks == max(ticks))
+    }
+  }
+  
+  return(data_return)
+}
+```
+
+```{r}
+# summarised runs, full time series
+ws_summary_timeseries <- ws_summary_noise %>%
+  # per parameter combination
+      group_by(combination_number) %>%
+      # compute mean, min, max, sd, and trend
+      mutate(mean_sheep = mean(sheep),
+             mean_sheep_noise = mean(sheep_noise),
+             min_sheep = min(sheep),
+             min_sheep_noise = min(sheep_noise),
+             max_sheep = max(sheep),
+             max_sheep_noise = max(sheep_noise),
+             sd_sheep = sd(sheep),
+             sd_sheep_noise = sd(sheep_noise),
+             trend_sheep = sens.slope(sheep)$estimates,
+             trend_sheep_noise = sens.slope(sheep_noise)$estimates,
+             mean_wolves = mean(wolves),
+             mean_wolves_noise = mean(wolves_noise),
+             min_wolves = min(wolves),
+             min_wolves_noise = min(wolves_noise),
+             max_wolves = max(wolves),
+             max_wolves_noise = max(wolves_noise),
+             sd_wolves = sd(wolves),
+             sd_wolves_noise = sd(wolves_noise),
+             trend_wolves = sens.slope(wolves)$estimates,
+             trend_wolves_noise = sens.slope(wolves_noise)$estimates,
+             mean_grass = mean(grass),
+             mean_grass_noise = mean(grass_noise),
+             min_grass = min(grass),
+             min_grass_noise = min(grass_noise),
+             max_grass = max(grass),
+             max_grass_noise = max(grass_noise),
+             sd_grass = sd(grass),
+             sd_grass_noise = sd(grass_noise),
+             trend_grass = sens.slope(grass)$estimates,
+             tend_grass_noise = sens.slope(grass_noise)$estimates) %>%
+  mutate(sample_size = 200,
+         sample_method = 'random',
+         summarise_runs = 'summarised',
+         datapoints = 'timeseries')
+
+# not summarised, full time series
+ws_full_timeseries <- ws_full_noise %>%
+  # per parameter combination & run number
+      group_by(combination_number, run) %>%
+      # compute mean, min, max, sd, and trend
+      mutate(mean_sheep = mean(sheep),
+             mean_sheep_noise = mean(sheep_noise),
+             min_sheep = min(sheep),
+             min_sheep_noise = min(sheep_noise),
+             max_sheep = max(sheep),
+             max_sheep_noise = max(sheep_noise),
+             sd_sheep = sd(sheep),
+             sd_sheep_noise = sd(sheep_noise),
+             trend_sheep = sens.slope(sheep)$estimates,
+             trend_sheep_noise = sens.slope(sheep_noise)$estimates,
+             mean_wolves = mean(wolves),
+             mean_wolves_noise = mean(wolves_noise),
+             min_wolves = min(wolves),
+             min_wolves_noise = min(wolves_noise),
+             max_wolves = max(wolves),
+             max_wolves_noise = max(wolves_noise),
+             sd_wolves = sd(wolves),
+             sd_wolves_noise = sd(wolves_noise),
+             trend_wolves = sens.slope(wolves)$estimates,
+             trend_wolves_noise = sens.slope(wolves_noise)$estimates,
+             mean_grass = mean(grass),
+             mean_grass_noise = mean(grass_noise),
+             min_grass = min(grass),
+             min_grass_noise = min(grass_noise),
+             max_grass = max(grass),
+             max_grass_noise = max(grass_noise),
+             sd_grass = sd(grass),
+             sd_grass_noise = sd(grass_noise),
+             trend_grass = sens.slope(grass)$estimates,
+             tend_grass_noise = sens.slope(grass_noise)$estimates) %>%
+  mutate(sample_size = 200,
+         sample_method = 'random',
+         summarise_runs = 'full',
+         datapoints = 'timeseries')
+
+# summarised runs, timesteps
+ws_summary_timesteps <- TimeSeriesSummarising(
+  ws_summary_noise, full = FALSE,
+  timesteps = TRUE) %>%
+  mutate(sample_size = 200,
+         sample_method = 'random',
+         summarise_runs = 'summarised',
+         datapoints = 'timesteps')
+
+# not summarised, timesteps
+ws_full_timesteps <- TimeSeriesSummarising(
+  ws_full_noise, full = TRUE,
+  timesteps = TRUE) %>%
+  mutate(sample_size = 200,
+         sample_method = 'random',
+         summarise_runs = 'full',
+         datapoints = 'timesteps')
+
+# summarised, endpoints
+ws_summary_endpoints <- TimeSeriesSummarising(
+  ws_summary_noise, full = FALSE,
+  timesteps = FALSE) %>%
+  mutate(sample_size = 200,
+         sample_method = 'random',
+         summarise_runs = 'summarised',
+         datapoints = 'endpoints')
+
+# not summarised, endpoints
+ws_full_endpoints <- TimeSeriesSummarising(
+  ws_full_noise, full = TRUE,
+  timesteps = FALSE) %>%
+  mutate(sample_size = 200,
+         sample_method = 'random',
+         summarise_runs = 'full',
+         datapoints = 'endpoints')
+
+# merge into 1 file and save as a complete training data set
+ws_training <- ungroup(ws_full_timeseries)
+ws_training <- ws_training %>%
+  add_row(ws_summary_timesteps) %>%
+  add_row(ws_summary_endpoints) %>%
+  add_row(ws_summary_timeseries) %>%
+  add_row(ws_full_timesteps) %>%
+  add_row(ws_full_endpoints) %>%
+  select(- technique)
+
+ws_training %>%
+  write_csv(file = 'data/training/wolfsheep_training200.csv')
+```
+
+# Differentiate
+```{r}
+ws_train <- read_csv('data/training/wolfsheep_training200.csv') %>%
+  rename(trend_grass_noise = tend_grass_noise)
+```
+
+Function to fill out data by extending time series:
+```{r}
+FillOutData <- function(data){
+  # find columns with sheep data
+  sheep_cols <- which(startsWith(colnames(data), 'sheep_'))[-c(1,2)]
+  wolves_cols <- which(startsWith(colnames(data), 'wolves_'))[-c(1,2)]
+  grass_cols <- which(startsWith(colnames(data), 'grass_'))[-1]
+  
+  # for each of the columns with sheep data
+  for(i in sheep_cols){
+    # run through all rows
+    for(j in 1:nrow(data)){
+      # if a data point is NA, replace it with other data
+      if(is.na(data[j, i])){
+        # if it's the first data column,
+        # take data from the second column
+        if(i == min(sheep_cols)){
+          data[j, i] <- data[j, i + 1]
+          if(is.na(data[j, i])){
+            data[j, i] <- data[j, i + 2]
+          }
+        } else {
+          # otherwise take data from the previous column
+          data[j, i] <- data[j, i - 1]
+        }
+      }
+    }
+  }
+  
+  # same for wolves data
+  for(i in wolves_cols){
+    for(j in 1:nrow(data)){
+      if(is.na(data[j, i])){
+        if(i == min(wolves_cols)){
+          data[j, i] <- data[j, i + 1]
+          if(is.na(data[j, i])){
+            data[j, i] <- data[j, i + 2]
+          }
+        } else {
+          data[j, i] <- data[j, i - 1]
+        }
+      }
+    }
+  }
+  
+  # same for grass data
+  for(i in grass_cols){
+    for(j in 1:nrow(data)){
+      if(is.na(data[j, i])){
+        if(i == min(grass_cols)){
+          data[j, i] <- data[j, i + 1]
+          if(is.na(data[j, i])){
+            data[j, i] <- data[j, i + 2]
+          }
+        } else {
+          data[j, i] <- data[j, i - 1]
+        }
+      }
+    }
+  }
+  
+  # return corrected data frame
+  return(data)
+}
+```
+
+Retrieve the different training data sets:
+- endpoints only, not summarised
+```{r}
+# obtain data frame without noise
+data_end_full_clean <- ws_train %>%
+  filter(datapoints == 'endpoints',
+         summarise_runs == 'full') %>%
+  select(wolves, sheep, grass,
+         min_sheep, min_wolves, min_grass,
+         max_sheep, max_wolves, max_grass,
+         sd_sheep, sd_wolves, sd_grass,
+         trend_sheep, trend_wolves, trend_grass,
+         mean_sheep, mean_wolves, mean_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth)
+
+data_end_full_clean %>%
+  write_csv('data/training/ws_end_full_clean.csv')
+
+# obtain data frame with output noise
+data_end_full_outputnoise <- ws_train %>%
+  filter(datapoints == 'endpoints',
+         summarise_runs == 'full') %>%
+  select(wolves_noise, sheep_noise, grass_noise,
+         min_sheep_noise, min_wolves_noise, min_grass_noise,
+         max_sheep_noise, max_wolves_noise, max_grass_noise,
+         sd_sheep_noise, sd_wolves_noise, sd_grass_noise,
+         trend_sheep_noise, trend_wolves_noise, trend_grass_noise,
+         mean_sheep_noise, mean_wolves_noise, mean_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise)
+
+data_end_full_outputnoise %>%
+  write_csv('data/training/ws_end_full_outputnoise.csv')
+
+# no need to fill out data frame because it's endpoints only
+```
+
+- endpoints only, summarised
+```{r}
+data_end_sum_clean <- ws_train %>%
+  filter(datapoints == 'endpoints',
+         summarise_runs == 'summarised') %>%
+  select(wolves, sheep, grass,
+         min_sheep, min_wolves, min_grass,
+         max_sheep, max_wolves, max_grass,
+         sd_sheep, sd_wolves, sd_grass,
+         trend_sheep, trend_wolves, trend_grass,
+         mean_sheep, mean_wolves, mean_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth)
+
+data_end_sum_clean %>%
+  write_csv('data/training/ws_end_sum_clean.csv')
+
+data_end_sum_outputnoise <- ws_train %>%
+  filter(datapoints == 'endpoints',
+         summarise_runs == 'summarised') %>%
+  select(wolves_noise, sheep_noise, grass_noise,
+         min_sheep_noise, min_wolves_noise, min_grass_noise,
+         max_sheep_noise, max_wolves_noise, max_grass_noise,
+         sd_sheep_noise, sd_wolves_noise, sd_grass_noise,
+         trend_sheep_noise, trend_wolves_noise, trend_grass_noise,
+         mean_sheep_noise, mean_wolves_noise, mean_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise)
+
+data_end_sum_outputnoise %>%
+  write_csv('data/training/ws_end_sum_outputnoise.csv')
+```
+
+- Timesteps every 10 ticks, not summarised
+```{r}
+data_10_full_clean <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'full',
+         ticks %% 10 == 0) %>%
+  select(combination_number, run,
+         ticks, wolves, sheep, grass,
+         mean_wolves, mean_sheep, mean_grass,
+         min_wolves, min_sheep, min_grass,
+         max_wolves, max_sheep, max_grass,
+         sd_wolves, sd_sheep, sd_grass,
+         trend_wolves, trend_sheep, trend_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  distinct() %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass))
+
+data_10_full_outputnoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'full',
+         ticks %% 10 == 0) %>%
+  select(combination_number, run,
+         ticks, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+  distinct() %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_10_full_doublenoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'full',
+         ticks_noise %% 10 == 0) %>%
+  select(combination_number, run,
+         ticks_noise, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+  distinct() %>%
+   pivot_wider(names_from = ticks_noise,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+# complete incomplete cases before fitting
+data_10_full_clean <- FillOutData(data_10_full_clean)
+data_10_full_doublenoise <- FillOutData(data_10_full_doublenoise)
+data_10_full_outputnoise <- FillOutData(data_10_full_outputnoise)
+
+data_10_full_clean %>%
+  write_csv('data/training/ws_10_full_clean.csv')
+data_10_full_outputnoise %>%
+  write_csv('data/training/ws_10_full_outputnoise.csv')
+data_10_full_doublenoise %>%
+  write_csv('data/training/ws_10_full_doublenoise.csv')
+```
+
+- Every 10 timesteps, summarised
+```{r}
+data_10_sum_clean <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'summarised',
+         ticks %% 10 == 0) %>%
+  select(ticks, wolves, sheep, grass,
+         mean_wolves, mean_sheep, mean_grass,
+         min_wolves, min_sheep, min_grass,
+         max_wolves, max_sheep, max_grass,
+         sd_wolves, sd_sheep, sd_grass,
+         trend_wolves, trend_sheep, trend_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_10_sum_outputnoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'summarised',
+         ticks %% 10 == 0) %>%
+  select(ticks, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_10_sum_doublenoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'summarised',
+         ticks_noise %% 10 == 0) %>%
+  select(ticks_noise, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks_noise,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_10_sum_clean <- FillOutData(data_10_sum_clean)
+data_10_sum_doublenoise <- FillOutData(data_10_sum_doublenoise)
+data_10_sum_outputnoise <- FillOutData(data_10_sum_outputnoise)
+
+data_10_sum_clean %>%
+  write_csv('data/training/ws_10_sum_clean.csv')
+data_10_sum_outputnoise %>%
+  write_csv('data/training/ws_10_sum_outputnoise.csv')
+data_10_sum_doublenoise %>%
+  write_csv('data/training/ws_10_sum_doublenoise.csv')
+```
+
+- Every 20 timesteps, not summarised
+```{r}
+data_20_full_clean <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'full',
+         ticks %% 20 == 0) %>%
+  select(ticks, wolves, sheep, grass,
+         mean_wolves, mean_sheep, mean_grass,
+         min_wolves, min_sheep, min_grass,
+         max_wolves, max_sheep, max_grass,
+         sd_wolves, sd_sheep, sd_grass,
+         trend_wolves, trend_sheep, trend_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_20_full_outputnoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'full',
+         ticks %% 20 == 0) %>%
+  select(ticks, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_20_full_doublenoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'full',
+         ticks_noise %% 20 == 0) %>%
+  select(ticks_noise, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks_noise,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_20_full_clean <- FillOutData(data_20_full_clean)
+data_20_full_doublenoise <- FillOutData(data_20_full_doublenoise)
+data_20_full_outputnoise <- FillOutData(data_20_full_outputnoise)
+
+data_20_full_clean %>%
+  write_csv('data/training/ws_20_full_clean.csv')
+data_20_full_outputnoise %>%
+  write_csv('data/training/ws_20_full_outputnoise.csv')
+data_20_full_doublenoise %>%
+  write_csv('data/training/ws_20_full_doublenoise.csv')
+```
+
+- Every 20 timesteps, summarised
+```{r}
+data_20_sum_clean <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'summarised',
+         ticks %% 20 == 0) %>%
+  select(ticks, wolves, sheep, grass,
+         mean_wolves, mean_sheep, mean_grass,
+         min_wolves, min_sheep, min_grass,
+         max_wolves, max_sheep, max_grass,
+         sd_wolves, sd_sheep, sd_grass,
+         trend_wolves, trend_sheep, trend_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_20_sum_outputnoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'summarised',
+         ticks %% 20 == 0) %>%
+  select(ticks, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_20_sum_doublenoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'summarised',
+         ticks_noise %% 20 == 0) %>%
+  select(ticks_noise, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks_noise,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_20_sum_clean <- FillOutData(data_20_sum_clean)
+data_20_sum_doublenoise <- FillOutData(data_20_sum_doublenoise)
+data_20_sum_outputnoise <- FillOutData(data_20_sum_outputnoise)
+
+data_20_sum_clean %>%
+  write_csv('data/training/ws_20_sum_clean.csv')
+data_20_sum_outputnoise %>%
+  write_csv('data/training/ws_20_sum_outputnoise.csv')
+data_20_sum_doublenoise %>%
+  write_csv('data/training/ws_20_sum_doublenoise.csv')
+``` 
+
+- Every 50 timesteps, not summarised
+```{r}
+data_50_full_clean <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'full',
+         ticks %% 50 == 0) %>%
+  select(ticks, wolves, sheep, grass,
+         mean_wolves, mean_sheep, mean_grass,
+         min_wolves, min_sheep, min_grass,
+         max_wolves, max_sheep, max_grass,
+         sd_wolves, sd_sheep, sd_grass,
+         trend_wolves, trend_sheep, trend_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_50_full_outputnoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'full',
+         ticks %% 50 == 0) %>%
+  select(ticks, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_50_full_doublenoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'full',
+         ticks_noise %% 50 == 0) %>%
+  select(ticks_noise, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks_noise,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_50_full_clean <- FillOutData(data_50_full_clean)
+data_50_full_doublenoise <- FillOutData(data_50_full_doublenoise)
+data_50_full_outputnoise <- FillOutData(data_50_full_outputnoise)
+
+data_50_full_clean %>%
+  write_csv('data/training/ws_50_full_clean.csv')
+data_50_full_outputnoise %>%
+  write_csv('data/training/ws_50_full_outputnoise.csv')
+data_50_full_doublenoise %>%
+  write_csv('data/training/ws_50_full_doublenoise.csv')
+```
+
+- Every 50 timesteps, summarised
+```{r}
+data_50_sum_clean <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'summarised',
+         ticks %% 50 == 0) %>%
+  select(ticks, wolves, sheep, grass,
+         mean_wolves, mean_sheep, mean_grass,
+         min_wolves, min_sheep, min_grass,
+         max_wolves, max_sheep, max_grass,
+         sd_wolves, sd_sheep, sd_grass,
+         trend_wolves, trend_sheep, trend_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_50_sum_outputnoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'summarised',
+         ticks %% 50 == 0) %>%
+  select(ticks, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_50_sum_doublenoise <- ws_train %>%
+  filter(datapoints == 'timesteps',
+         summarise_runs == 'summarised',
+         ticks_noise %% 50 == 0) %>%
+  select(ticks_noise, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks_noise,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_50_sum_clean <- FillOutData(data_50_sum_clean)
+data_50_sum_doublenoise <- FillOutData(data_50_sum_doublenoise)
+data_50_sum_outputnoise <- FillOutData(data_50_sum_outputnoise)
+
+data_50_sum_clean %>%
+  write_csv('data/training/ws_50_sum_clean.csv')
+data_50_sum_outputnoise %>%
+  write_csv('data/training/ws_50_sum_outputnoise.csv')
+data_50_sum_doublenoise %>%
+  write_csv('data/training/ws_50_sum_doublenoise.csv')
+```
+
+- Full time series, not summarised
+```{r}
+data_series_full_clean <- ws_train %>%
+  filter(datapoints == 'timeseries',
+         summarise_runs == 'full') %>%
+  select(ticks, wolves, sheep, grass,
+         mean_wolves, mean_sheep, mean_grass,
+         min_wolves, min_sheep, min_grass,
+         max_wolves, max_sheep, max_grass,
+         sd_wolves, sd_sheep, sd_grass,
+         trend_wolves, trend_sheep, trend_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_series_full_outputnoise <- ws_train %>%
+  filter(datapoints == 'timeseries',
+         summarise_runs == 'full') %>%
+  select(ticks, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_series_full_doublenoise <- ws_train %>%
+  filter(datapoints == 'timeseries',
+         summarise_runs == 'full') %>%
+  select(ticks_noise, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks_noise,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_series_full_clean <- FillOutData(data_series_full_clean)
+data_series_full_doublenoise <-
+  FillOutData(data_series_full_doublenoise)
+data_series_full_outputnoise <-
+  FillOutData(data_series_full_outputnoise)
+
+data_series_full_clean %>%
+  write_csv('data/training/ws_series_full_clean.csv')
+data_series_full_outputnoise %>%
+  write_csv('data/training/ws_series_full_outputnoise.csv')
+data_series_full_doublenoise %>%
+  write_csv('data/training/ws_series_full_doublenoise.csv')
+```
+
+- Full time series, summarised
+```{r}
+data_series_sum_clean <- ws_train %>%
+  filter(datapoints == 'timeseries',
+         summarise_runs == 'summarised') %>%
+  select(ticks, wolves, sheep, grass,
+         mean_wolves, mean_sheep, mean_grass,
+         min_wolves, min_sheep, min_grass,
+         max_wolves, max_sheep, max_grass,
+         sd_wolves, sd_sheep, sd_grass,
+         trend_wolves, trend_sheep, trend_grass,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_series_sum_outputnoise <- ws_train %>%
+  filter(datapoints == 'timeseries',
+         summarise_runs == 'summarised') %>%
+  select(ticks, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_series_sum_doublenoise <- ws_train %>%
+  filter(datapoints == 'timeseries',
+         summarise_runs == 'summarised') %>%
+  select(ticks_noise, wolves_noise, sheep_noise, grass_noise,
+         mean_wolves_noise, mean_sheep_noise, mean_grass_noise,
+         min_wolves_noise, min_sheep_noise, min_grass_noise,
+         max_wolves_noise, max_sheep_noise, max_grass_noise,
+         sd_wolves_noise, sd_sheep_noise, sd_grass_noise,
+         trend_wolves_noise, trend_sheep_noise, trend_grass_noise,
+         initial_number_sheep, initial_number_wolves,
+         sheep_gain_from_food, wolves_gain_from_food,
+         sheep_reproduce, wolves_reproduce, grass_regrowth) %>%
+  rename(wolves = wolves_noise,
+         min_wolves = min_wolves_noise, max_wolves = max_wolves_noise,
+         sd_wolves = sd_wolves_noise, mean_wolves = mean_wolves_noise,
+         trend_wolves = trend_wolves_noise,
+         sheep = sheep_noise,
+         min_sheep = min_sheep_noise, max_sheep = max_sheep_noise,
+         sd_sheep = sd_sheep_noise, mean_sheep = mean_sheep_noise,
+         trend_sheep = trend_sheep_noise,
+         grass = grass_noise,
+         min_grass = min_grass_noise, max_grass = max_grass_noise,
+         sd_grass = sd_grass_noise, mean_grass = mean_grass_noise,
+         trend_grass = trend_grass_noise) %>%
+   pivot_wider(names_from = ticks_noise,
+              values_from = c(wolves, sheep, grass),
+              values_fn = mean)
+
+data_series_sum_clean <- FillOutData(data_series_sum_clean)
+data_series_sum_doublenoise <-
+  FillOutData(data_series_sum_doublenoise)
+data_series_sum_outputnoise <-
+  FillOutData(data_series_sum_outputnoise)
+
+data_series_sum_clean %>%
+  write_csv('data/training/ws_series_sum_clean.csv')
+data_series_sum_outputnoise %>%
+  write_csv('data/training/ws_series_sum_outputnoise.csv')
+data_series_sum_doublenoise %>%
+  write_csv('data/training/ws_series_sum_doublenoise.csv')
+```

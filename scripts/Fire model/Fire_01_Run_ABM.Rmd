@@ -1,0 +1,438 @@
+---
+title: "Fire_00_Run_Model"
+author: "Femke Keij S2647168"
+date: "2023-02-06"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Import Python modules:
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import math
+import itertools
+import statistics
+sns.set_style('white')
+sns.set_context('talk')
+
+import pyNetLogo # to run NetLogo from RStudio
+```
+
+Import R packages:
+```{r}
+# for importing / working with tidy data
+library(tidyverse)
+# for arranging plots
+library(patchwork)
+# for cumulative computations
+library(zoo)
+# for rolling averages
+library(slider)
+# for latin hypercube sampling
+library(lhs)
+```
+
+Set seed:
+```{r}
+set.seed(42)
+```
+
+Link to and start the Fire model:
+```{python}
+netlogo = pyNetLogo.NetLogoLink(gui = True) # start netlogo
+
+netlogo.load_model(r"C:\Users\Femke Keij\OneDrive\Thesis\R projects\LU thesis GitHub\models\Fire_myversion.nlogo")
+# open model
+```
+
+# Decide on model outputs
+I'll use the burn percentage at each tick. There is no set number of ticks in this case, since the simulation stops when the burn does.
+
+# Determine number of runs
+1) coefficient of variation
+2) mean convergence
+3) windowed variance
+
+Optionally, we can set a separate convergence boundary $\epsilon$ for each output. This is only necessary when the outputs are on different scales, which is not the case here. I choose $\epsilon_{c_\upsilon} = 0.1$, $\epsilon_\mu = 1$, and $\epsilon_{\omega^2} = 0.2$.
+
+We can compute all these statistics using just 1 data set. To do so, we run each parameter combination 50 times and save the outputs at the last time step. I combine a low, mid, and high value for tree density with both combinations for directions.
+```{python}
+dictionary = {'density': [5, 50, 95], 'directions': [4, 8]}
+
+def expand_grid(data_dict):
+    rows = itertools.product(*data_dict.values())
+    return pd.DataFrame.from_records(rows, columns = data_dict.keys())
+
+param_comb = expand_grid(dictionary)
+```
+
+Obtain all necessary data:
+```{python}
+# data frame to store results
+out_df = pd.DataFrame(columns = ['density', 'directions', 'run', 'burn_percentage', 'tick'])
+# add empty row to start
+out_df = out_df.append({'density': 0, 'directions': 0, 'run': 0, 'burn_percentage': -100, 'tick': - 100}, ignore_index = True)
+
+# set counter
+count = 0
+# set random seed
+netlogo.command('clean')
+
+for i in range(0,len(param_comb)):
+  # set parameters
+  density = str(param_comb['density'][i])
+  directions = str(param_comb['directions'][i])
+  netlogo.command(''.join(['set density ', density]))
+  netlogo.command(''.join(['set directions ', directions]))
+  
+  # repeat 50 times with set parameters
+  for x in range(0, 50):
+    # setup
+    netlogo.command('setup')
+    # run
+    netlogo.command('repeat 10000 [go]')
+    # record number of burned trees and number of initial trees
+    initial = netlogo.report('initial-trees')
+    burned = netlogo.report('burned-trees')
+    # calculate % burned
+    burn_percentage = burned / initial * 100
+    # ticks before end of simulation
+    ticks = netlogo.report('ticks')
+    # store
+    out_df = out_df.append({'density': density, 'directions': directions, 'run': x + 1, 'burn_percentage': burn_percentage, 'tick': ticks}, ignore_index = True)
+    
+out_df.to_csv('data/raw/fire_numruns.csv')
+```
+
+Compute statistics:
+```{r}
+numruns <- read.csv('data/raw/fire_numruns.csv')
+
+# remove first row & column
+numruns <- numruns %>%
+  slice(-1) %>%
+  select(-1)
+
+# add a unique number for each parameter combination
+numruns <- numruns %>%
+  group_by(density, directions) %>%
+  mutate(combination_number = cur_group_id())
+```
+
+1) Mean convergence
+With $\epsilon_\mu = 1$
+```{r}
+numruns <- numruns %>%
+  group_by(combination_number, tick) %>%
+  # compute cumulative mean
+  # and differences between means
+  mutate(mean_burn = cummean(burn_percentage),
+         mean_diff_burn = mean_burn - 
+           lag(mean_burn, default = mean_burn[1]))
+
+# compute at which point the mean difference settles below 1
+mean_conv_burn <- numruns %>%
+  group_by(combination_number) %>%
+  filter(abs(mean_diff_burn) < 1,
+         run != 1) %>%
+  slice(which.min(run))
+
+# plot
+p1 <- numruns %>%
+  ggplot(mapping = aes(x = run, y = mean_diff_burn,
+                       group = combination_number)) +
+  geom_line(colour = 'lightgrey') +
+  geom_hline(yintercept = 1, colour = 'darkgreen') +
+  geom_hline(yintercept = - 1, colour = 'darkgreen') +
+  theme_minimal() +
+  labs(x = 'runs',
+       y = 'difference mean burn percentage')
+
+mean_conv_plot <- p1 
+```
+
+2) Coefficient of variation
+With $\epsilon_{c_\upsilon} = 0.1$.
+```{r}
+numruns <- numruns %>%
+  group_by(combination_number) %>%
+  # compute cumulative standard deviations
+  # compute coefficient of variation
+  mutate(sd_burn = rollapplyr(burn_percentage, 1:n(), sd),
+         cv_burn = sd_burn / mean_burn) %>%
+  # replace all NAs (resulting from sd = 0) with 0
+  replace(is.na(.), 0) %>%
+  # compute differences in cv
+  mutate(cv_diff = cv_burn - lag(cv_burn, default = cv_burn[1]))
+  
+# compute at which point the coefficient of variation settles below 0.1
+cv_conv_burn <- numruns %>%
+  group_by(combination_number) %>%
+  filter(abs(cv_diff) < 0.1,
+         run != 1) %>%
+  slice(which.min(run))
+
+# plot
+cv_conv_p1 <- numruns %>%
+  ggplot(mapping = aes(x = run, y = cv_diff,
+                       group = combination_number)) +
+  geom_line(colour = 'lightgrey') +
+  geom_hline(yintercept = 0.1, colour = 'darkgreen') +
+  geom_hline(yintercept = - 0.1, colour = 'darkgreen') +
+  theme_minimal() +
+  labs(x = 'runs',
+       y = 'cv burn percentage')
+
+cv_conv_p2 <- cv_conv_burn %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(cv_conv_burn$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(cv_conv_burn$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(cv_conv_burn$run) + 0.2, y = 3.5,
+           colour = 'darkgreen') +
+  annotate(geom = 'text', label = 'median',
+           x = median(cv_conv_burn$run) - 0.2, y = 3.5,
+           colour = 'darkblue') +
+  theme_minimal() +
+  labs(y = 'count',
+       x = 'number of runs until cv convergence')
+```
+
+3) Relative outer variance
+Width of window: 10 runs
+With $\epsilon_\omega^2 = 0.2$.
+```{r}
+numruns <- numruns %>% 
+  group_by(combination_number) %>% 
+  mutate(windowed_var = slider::slide_dbl(burn_percentage,
+                                          var, .before = 5,
+                                          .after = 5),
+         # if windowed_var = 0, set relative_outer_var to 0 also
+         relative_outer_var = ifelse(windowed_var == 0,
+                                     0,
+                                     windowed_var / max(windowed_var)))
+
+# compute at which point the relative outer variance settles below 0.2
+omega_conv <- numruns %>%
+  group_by(combination_number) %>%
+  filter(abs(relative_outer_var) < 0.2,
+         run != 1) %>%
+  slice(which.min(run))
+
+# plot
+outer_var_conv_p1 <- numruns %>%
+  ggplot(mapping = aes(x = run, y = relative_outer_var,
+                       group = combination_number)) +
+  geom_line(colour = 'lightgrey') +
+  geom_hline(yintercept = 0.2, colour = 'darkgreen') +
+  labs(y = 'relative outer variance burn percentage',
+       x = 'runs') +
+  theme_minimal()
+
+outer_var_conv_p2 <- omega_conv %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(omega_conv$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(omega_conv$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(omega_conv$run) + 5, y = 2,
+           colour = 'darkgreen') +
+  annotate(geom = 'text', label = 'median',
+           x = median(omega_conv$run) - 5, y = 2,
+           colour = 'darkblue') +
+  theme_minimal() +
+  labs(y = 'count',
+       x = 'number of runs until relative outer variance convergence')
+```
+
+Inspect all results:
+```{r}
+plot <- (mean_conv_plot + cv_conv_p1)  / (outer_var_conv_p1 + 
+                                          (outer_var_conv_p2 /
+                                             cv_conv_p2)) +
+    plot_layout(guides = 'collect') +
+    plot_annotation(tag_levels = 'A') &
+    theme_minimal() +
+    theme(plot.tag = element_text(size = 8),
+          panel.grid.minor = element_blank())
+
+# save plot
+ggsave('figures/fire_convergence.pdf',
+       height = 15, width = 20, units = 'cm')
+```
+
+# Sampling parameter space
+Because this model is not very large, I can simply sample the entire parameter space.
+Set up the model and run 5 times for each density, record the percentage of trees burned at every tick:
+```{python}
+densities = list(range(1,100))
+directions = [4, 8]
+parameter_space_df = pd.DataFrame(columns = ['density', 'burn_percentage', 'directions', 'ticks', 'run'])
+
+for y in directions:
+  direction = str(y)
+  netlogo.command(''.join(['set directions ', direction]))
+  for d in densities:
+    # density
+    density = str(d)
+    # set density
+    netlogo.command(''.join(['set density ', density]))
+    # set a random seed
+    netlogo.command('clean')
+    # repeat the execution of the model 5 times to account
+    # for stochasticity
+    for x in range(1,6):
+      # set up
+      netlogo.command('setup')
+      initial = netlogo.report('initial-trees')
+      # execute 1 tick at a time, until everything is burned up
+      turtles = netlogo.report('count turtles')
+      while turtles != 0:
+        netlogo.command('go')
+        # record burn percentage
+        burned = netlogo.report('burned-trees')
+        perc_burn = burned / initial * 100
+        ticks = netlogo.report('ticks')
+        # store in data frame
+        parameter_space_df = parameter_space_df.append({'density': density, 'burn_percentage': perc_burn, 'directions': direction, 'ticks': ticks, 'run': x}, ignore_index = True)
+        # check turtles
+        turtles = netlogo.report('count turtles')
+        
+# save data as a csv file.
+parameter_space_df.to_csv("C:/Users/Femke Keij/OneDrive/Thesis/R projects/LU thesis GitHub/data/raw/fire_output2.csv")
+```
+
+Close the model:
+```{python}
+netlogo.kill_workspace()
+```
+
+Stop running the python environment:
+```{python}
+quit
+```
+
+# Summarise repeated runs
+Clear working directory:
+```{r}
+rm(list = ls(all = TRUE))
+```
+
+Import csv output format for the model as tidy data. We ignore the first column because it contains the indices.
+```{r}
+fire_output <- read_csv("data/raw/fire_output2.csv",
+                        col_names = TRUE)[, - 1]
+```
+
+Look at the distribution of the outputs within 1 parameter combination. If this is approximately normal (or concentrated around a single mean), we can summarise the data into a single value (the mean).
+```{r}
+# add parameter combination numbers
+fire_output <- fire_output %>%
+  group_by(density, directions) %>%
+  mutate(combination_number = cur_group_id())
+
+# retrieve values at middle and end of the simulation
+fire_output <- fire_output %>%
+  group_by(combination_number, run) %>%
+  mutate(time_label = ifelse(ticks == max(ticks), 'end',
+                             ifelse(ticks == floor(median(ticks)),
+                                    'middle', '--')))
+
+# plot a histogram of all the standard deviations
+sd_plot <- fire_output %>%
+  filter(time_label %in% c('middle', 'end')) %>%
+  group_by(combination_number, time_label) %>%
+  mutate(sd = sd(burn_percentage)) %>%
+  select(combination_number, sd, time_label) %>%
+  distinct() %>%
+  ggplot(mapping = aes(x = sd)) +
+  geom_histogram(binwidth = 0.1) +
+  facet_grid(~ time_label) +
+  theme_minimal() +
+  theme(panel.border = element_rect(fill = NA,
+                                    colour = 'lightgrey'),
+        panel.grid.minor = element_blank()) +
+  labs(x = 'sd of burn percentage per parameter combination')
+
+# inspect the parameter combinations that yield large standard deviations
+inspect_numbers <- fire_output %>%
+  filter(time_label %in% c('middle', 'end')) %>%
+  group_by(combination_number, time_label) %>%
+  mutate(sd = sd(burn_percentage)) %>%
+  filter(sd > 10) %>%
+  select(combination_number, time_label) %>%
+  distinct()
+
+# create labels for combination numbers
+new_labs <- as_labeller(c(`117` = '59 %, 4 d', `119` = '60 %, 4 d',
+                         `80` = '40 %, 8 d', `82` = '41 %, 8 d',
+                         `middle` = 'middle', `end` = 'end'))
+
+fire_output_plot <- fire_output %>%
+  group_by(combination_number, time_label) %>%
+  mutate(mean_val = mean(burn_percentage))
+
+individual_plots <- fire_output_plot %>%
+  filter(time_label %in% inspect_numbers$time_label,
+         combination_number %in% 
+           inspect_numbers$combination_number) %>%
+  ggplot(mapping = aes(x = burn_percentage)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(aes(xintercept = mean_val,
+                 group = combination_number),
+             colour = 'red') +
+  facet_grid(combination_number ~ time_label,
+             labeller = new_labs) +
+  theme_minimal() +
+    theme(panel.border = element_rect(fill = NA,
+                                      colour ='lightgrey'),
+          panel.grid.minor = element_blank()) +
+  labs(x = '% burned trees') +
+  scale_y_continuous(breaks = c(0, 1))
+
+sd_plot / individual_plots + 
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = 'A') &
+  theme(plot.tag = element_text(size = 8))
+  
+ggsave('figures/fire_summarising.pdf',
+       height = 15, width = 20, units = 'cm')
+```
+The data aren't spread very widely so summarising by mean makes sense. We can see this by the small sd's in the second plot and the individual plots for the parameter combinations.
+
+Manipulate data so that there is 1 outcome for each parameter combination:
+The outcomes for each parameter set are summarized by their mean 
+burn percentage at every tick of the simulation.
+```{r}
+# group the data by parameter combination and ticks
+fire_summary <- fire_output %>%
+  group_by(combination_number, ticks) %>%
+  # take the mean burn percentage numbers over the 5 runs for each density
+  summarise(mean_burn_percentage = mean(burn_percentage),
+            .groups = 'keep') %>%
+  group_by(combination_number) %>%
+  mutate(time_label = ifelse(ticks == max(ticks), 'end',
+                             ifelse(ticks == floor(median(ticks)),
+                                    'middle', '--')))
+
+fire_summary %>%
+  write_csv(file = 'data/processed/fire_summary.csv')
+```
+
+Also save non-summarised version:
+```{r}
+fire_output %>%
+  select(density, burn_percentage, directions, combination_number,
+         ticks, run, time_label) %>%
+  write_csv(file = 'data/processed/fire_full.csv')
+```

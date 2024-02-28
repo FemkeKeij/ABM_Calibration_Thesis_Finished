@@ -1,0 +1,401 @@
+---
+title: "WolfSheep_05_Evaluate_Performance"
+author: "Femke Keij S2647168"
+date: "2024-01-24"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Preliminaries
+Clear working directory & set random seed:
+```{r}
+rm(list = ls(all = TRUE))
+
+set.seed(42)
+```
+
+Packages used:
+```{r}
+# for importing / working with tidy data
+library(tidyverse)
+
+# for ggplot
+library(directlabels)
+library(patchwork)
+library(ggbeeswarm)
+```
+
+Data:
+```{r}
+lr_errors <- read_csv('data/results/wolfsheep_LR_errors.csv')
+pls_errors <- read_csv('data/results/wolfsheep_PLS_errors.csv')
+rf_errors <- read_csv('data/results/wolfsheep_rf_errors.csv')
+mrf_errors <- read_csv('data/results/wolfsheep_mrf_errors.csv')
+```
+
+Merge all data:
+```{r}
+errors <- bind_rows(lr_errors, pls_errors,
+                    rf_errors, mrf_errors)
+```
+
+```{r}
+metrics_vector <- c('perc_correct_params',
+                    'perc_initial_sheep_correct',
+                    'perc_initial_wolves_correct',
+                    'perc_food_sheep_correct',
+                    'perc_food_wolves_correct',
+                    'perc_sheep_rep_correct',
+                    'perc_wolves_rep_correct',
+                    'perc_grass_correct',
+                    'RMSE_initial_sheep',
+                    'RMSE_initial_wolves',
+                    'RMSE_food_sheep',
+                    'RMSE_food_wolves',
+                    'RMSE_sheep_rep',
+                    'RMSE_wolves_rep',
+                    'RMSE_grass',
+                    'ppp_initial_sheep',
+                    'ppp_initial_wolves',
+                    'ppp_food_sheep',
+                    'ppp_food_wolves',
+                    'ppp_sheep_rep',
+                    'ppp_wolves_rep',
+                    'ppp_grass')
+```
+
+# Plotted comparions
+Plot metrics for each method:
+```{r}
+errors_algorithms <- errors %>%
+    select(- c('NRMSE_initial_sheep',
+               'NRMSE_initial_wolves',
+               'NRMSE_food_sheep',
+               'NRMSE_food_wolves',
+               'NRMSE_sheep_rep',
+               'NRMSE_wolves_rep',
+               'NRMSE_grass'#,
+               #'sample_size',
+               #'sample_method',
+               #'summarise_runs',
+               #'datapoints',
+               #'noise'
+               )) %>%
+    mutate(algorithm = ifelse(algorithm == 'PLS',
+                              'Partial Least Squares',
+                              algorithm)) %>%
+    rename(perccorrect_all = perc_correct_params,
+           perccorrect_initial_sheep = perc_initial_sheep_correct,
+           perccorrect_initial_wolves = perc_initial_wolves_correct,
+           perccorrect_food_sheep = perc_food_sheep_correct,
+           perccorrect_food_wolves = perc_food_wolves_correct,
+           perccorrect_sheep_rep = perc_sheep_rep_correct,
+           perccorrect_wolves_rep = perc_wolves_rep_correct,
+           perccorrect_grass = perc_grass_correct) %>%
+    pivot_longer(cols = c('perccorrect_all',
+                          'perccorrect_initial_sheep',
+                          'perccorrect_initial_wolves',
+                          'perccorrect_food_sheep',
+                          'perccorrect_food_wolves',
+                          'perccorrect_sheep_rep',
+                          'perccorrect_wolves_rep',
+                          'perccorrect_grass',
+                          'RMSE_initial_sheep',
+                          'RMSE_initial_wolves',
+                          'RMSE_food_sheep',
+                          'RMSE_food_wolves',
+                          'RMSE_sheep_rep',
+                          'RMSE_wolves_rep',
+                          'RMSE_grass',
+                          'ppp_initial_sheep',
+                          'ppp_initial_wolves',
+                          'ppp_food_sheep',
+                          'ppp_food_wolves',
+                          'ppp_sheep_rep',
+                          'ppp_wolves_rep',
+                          'ppp_grass'),
+                 names_to = 'metric',
+                 values_to = 'value') %>%
+    #group_by(algorithm, metric) %>%
+    #mutate(mean = mean(value),
+    #       min = min(value),
+    #       max = max(value)) %>%
+    #select(- value) %>%
+    #distinct() %>%
+    #ungroup() %>%
+    rowwise %>%
+    mutate(metric_new = str_split(metric, '_', 2)[[1]][1],
+           entity = str_split(metric, '_', 2)[[1]][2]) %>%
+    select(- metric) %>%
+    rename(metric = metric_new)
+
+PlotErrorsPerformanceAlgorithms <- function(errors, parameter,
+                                            subtitle){
+  metric_labs <- c('perccorrect' =
+                     '% correctly estimated \n parameters',
+                   'ppp' = 'point prediction performance',
+                   'RMSE' = 'RMSE')
+  
+  if(parameter %in% c('initial_number_sheep',
+                      'food_sheep')){
+    errors_performance_algorithms <- errors %>%
+    filter(entity == parameter) %>%
+    ggplot(mapping = aes(x = fct_relevel(algorithm,
+                                         'Linear Regression',
+                                         'Partial Least Squares',
+                                         'Random Forest',
+                                         'Multivariate Random Forest'),
+                         y = value)) +
+    geom_boxplot() +
+    #geom_crossbar(aes(ymin = min, ymax = max),
+    #              width = 0.5, fill = 'grey') +
+    facet_wrap( ~ metric, scales = 'free_y',
+               labeller = labeller(metric = metric_labs)) +
+    labs(x = NULL,
+         y = 'range of scores obtained',
+         subtitle = subtitle) +
+    theme_minimal() +
+    theme(panel.grid.minor = element_blank(),
+          axis.title.x = element_blank(),
+          panel.border = element_rect(colour = 'lightgrey',
+                                      fill = NA),
+          axis.text.x = element_text(angle = 90))
+  } else {
+    errors_performance_algorithms <- errors %>%
+      filter(entity == parameter,
+             algorithm != 'Multivariate Random Forest') %>%
+      ggplot(mapping = aes(x = fct_relevel(algorithm,
+                                           'Linear Regression',
+                                           'Partial Least Squares',
+                                           'Random Forest'),
+                           y = value)) +
+      geom_boxplot() +
+      #geom_crossbar(aes(ymin = min, ymax = max),
+      #              width = 0.5, fill = 'grey') +
+      facet_wrap( ~ metric, scales = 'free_y',
+                 labeller = labeller(metric = metric_labs)) +
+      labs(x = NULL,
+           y = 'range of scores obtained',
+           subtitle = subtitle) +
+      theme_minimal() +
+      theme(panel.grid.minor = element_blank(),
+            axis.title.x = element_blank(),
+            panel.border = element_rect(colour = 'lightgrey',
+                                        fill = NA),
+            axis.text.x = element_text(angle = 90))
+  }
+
+  return(errors_performance_algorithms)
+}
+
+# initial number of sheep
+PlotErrorsPerformanceAlgorithms(errors_algorithms,
+                                parameter = 'initial_sheep',
+                                subtitle = 'initial number of sheep')
+
+ggsave('figures/ws_errors_algorithm_initial_sheep.pdf',
+       height = 10, width = 20, unit = 'cm')
+
+# initial number of wolves
+PlotErrorsPerformanceAlgorithms(errors_algorithms,
+                                parameter = 'initial_wolves',
+                                subtitle = 'initial number of wolves')
+
+ggsave('figures/ws_errors_algorithm_initial_wolves.pdf',
+       height = 10, width = 20, unit = 'cm')
+
+# sheep gain from food
+PlotErrorsPerformanceAlgorithms(errors_algorithms,
+                                parameter = 'food_sheep',
+                                subtitle = 'sheep gain from food')
+
+ggsave('figures/ws_errors_algorithm_sheep_food.pdf',
+       height = 10, width = 20, unit = 'cm')
+
+# wolves gain from food
+PlotErrorsPerformanceAlgorithms(errors_algorithms,
+                                parameter = 'food_wolves',
+                                subtitle = 'wolves gain from food')
+
+ggsave('figures/ws_errors_algorithm_wolves_food.pdf',
+       height = 10, width = 20, unit = 'cm')
+
+# sheep rep
+PlotErrorsPerformanceAlgorithms(errors_algorithms,
+                                parameter = 'sheep_rep',
+                                subtitle = 
+                                  'sheep reproduction probability')
+
+ggsave('figures/ws_errors_algorithm_sheep_rep.pdf',
+       height = 10, width = 20, unit = 'cm')
+
+# wolves rep
+PlotErrorsPerformanceAlgorithms(errors_algorithms,
+                                parameter = 'wolves_rep',
+                                subtitle =
+                                  'wolves reproduction probability')
+
+ggsave('figures/ws_errors_algorithm_wolves_rep.pdf',
+       height = 10, width = 20, unit = 'cm')
+
+# grass regrowth
+PlotErrorsPerformanceAlgorithms(errors_algorithms,
+                                parameter = 'grass',
+                                subtitle = 'grass regrowth time')
+
+ggsave('figures/ws_errors_algorithm_grass.pdf',
+       height = 10, width = 20, unit = 'cm')
+```
+
+Plot metrics for each dataset:
+```{r}
+errors_data <- errors %>%
+    select(- c('NRMSE_initial_sheep',
+               'NRMSE_initial_wolves',
+               'NRMSE_food_sheep',
+               'NRMSE_food_wolves',
+               'NRMSE_sheep_rep',
+               'NRMSE_wolves_rep',
+               'NRMSE_grass'#,
+               #'sample_size',
+               #'sample_method',
+               #'summarise_runs',
+               #'datapoints',
+               #'noise'
+               )) %>%
+    rename(perccorrect_all = perc_correct_params,
+           perccorrect_initial_sheep = perc_initial_sheep_correct,
+           perccorrect_initial_wolves = perc_initial_wolves_correct,
+           perccorrect_food_sheep = perc_food_sheep_correct,
+           perccorrect_food_wolves = perc_food_wolves_correct,
+           perccorrect_sheep_rep = perc_sheep_rep_correct,
+           perccorrect_wolves_rep = perc_wolves_rep_correct,
+           perccorrect_grass = perc_grass_correct) %>%
+    pivot_longer(cols = c('perccorrect_all',
+                          'perccorrect_initial_sheep',
+                          'perccorrect_initial_wolves',
+                          'perccorrect_food_sheep',
+                          'perccorrect_food_wolves',
+                          'perccorrect_sheep_rep',
+                          'perccorrect_wolves_rep',
+                          'perccorrect_grass',
+                          'RMSE_initial_sheep',
+                          'RMSE_initial_wolves',
+                          'RMSE_food_sheep',
+                          'RMSE_food_wolves',
+                          'RMSE_sheep_rep',
+                          'RMSE_wolves_rep',
+                          'RMSE_grass',
+                          'ppp_initial_sheep',
+                          'ppp_initial_wolves',
+                          'ppp_food_sheep',
+                          'ppp_food_wolves',
+                          'ppp_sheep_rep',
+                          'ppp_wolves_rep',
+                          'ppp_grass'),
+                 names_to = 'metric',
+                 values_to = 'value') %>%
+    rowwise %>%
+    mutate(metric_new = str_split(metric, '_', 2)[[1]][1],
+           entity = str_split(metric, '_', 2)[[1]][2]) %>%
+    select(- metric) %>%
+    rename(metric = metric_new)
+
+PlotErrorsPerformanceData <- function(errors, parameter,
+                                      subtitle){
+  metric_labs <- c('perccorrect' =
+                     '% correctly estimated \n parameters',
+                   'ppp' = 'point prediction performance',
+                   'RMSE' = 'RMSE')
+  
+  errors_performance_data <- errors %>%
+    mutate(summarise_runs = ifelse(summarise_runs == 'full',
+                                   'not summarised',
+                                   summarise_runs)) %>%
+    filter(entity == parameter) %>%
+    ggplot(mapping = aes(x = fct_relevel(noise,
+                                         'clean',
+                                         'output noise',
+                                         'double noise'),
+                         y = value,
+                         group_by = summarise_runs,
+                         fill = summarise_runs)) +
+    geom_boxplot() +
+    facet_wrap(datapoints ~ metric, scales = 'free_y',
+               ncol = 3,
+               labeller = labeller(metric = metric_labs)) +
+    labs(x = NULL,
+         y = 'range of scores obtained',
+         subtitle = subtitle,
+         fill = 'repeated runs \n summarised y/n') +
+    theme_minimal() +
+    theme(panel.grid.minor = element_blank(),
+          axis.title.x = element_blank(),
+          panel.border = element_rect(colour = 'lightgrey',
+                                      fill = NA),
+          axis.text.x = element_text(angle = 90))
+
+  return(errors_performance_data)
+}
+
+# initial number of sheep
+PlotErrorsPerformanceData(errors_data,
+                          parameter = 'initial_sheep',
+                          subtitle = 'initial number of sheep')
+
+ggsave('figures/ws_errors_data_initial_sheep.pdf',
+       height = 30, width = 20, unit = 'cm')
+
+# initial number of wolves
+PlotErrorsPerformanceData(errors_data,
+                                parameter = 'initial_wolves',
+                                subtitle = 'initial number of wolves')
+
+ggsave('figures/ws_errors_data_initial_wolves.pdf',
+       height = 30, width = 20, unit = 'cm')
+
+# sheep gain from food
+PlotErrorsPerformanceData(errors_data,
+                                parameter = 'food_sheep',
+                                subtitle = 'sheep gain from food')
+
+ggsave('figures/ws_errors_data_sheep_food.pdf',
+       height = 30, width = 20, unit = 'cm')
+
+# wolves gain from food
+PlotErrorsPerformanceData(errors_data,
+                                parameter = 'food_wolves',
+                                subtitle = 'wolves gain from food')
+
+ggsave('figures/ws_errors_data_wolves_food.pdf',
+       height = 30, width = 20, unit = 'cm')
+
+# sheep rep
+PlotErrorsPerformanceData(errors_data,
+                                parameter = 'sheep_rep',
+                                subtitle = 
+                                  'sheep reproduction probability')
+
+ggsave('figures/ws_errors_data_sheep_rep.pdf',
+       height = 30, width = 20, unit = 'cm')
+
+# wolves rep
+PlotErrorsPerformanceData(errors_data,
+                                parameter = 'wolves_rep',
+                                subtitle =
+                                  'wolves reproduction probability')
+
+ggsave('figures/ws_errors_data_wolves_rep.pdf',
+       height = 30, width = 20, unit = 'cm')
+
+# grass regrowth
+PlotErrorsPerformanceData(errors_data,
+                                parameter = 'grass',
+                                subtitle = 'grass regrowth time')
+
+ggsave('figures/ws_errors_data_grass.pdf',
+       height = 30, width = 20, unit = 'cm')
+```

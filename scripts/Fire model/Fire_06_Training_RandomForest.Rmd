@@ -1,0 +1,816 @@
+---
+title: "Fire_09_MultivariateRandomForest"
+author: "Femke Keij S2647168"
+date: "2023-03-21"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Preliminaries
+Clear working directory & set random seed:
+```{r}
+rm(list = ls(all = TRUE))
+
+set.seed(42)
+```
+
+Packages used:
+```{r}
+# for importing / working with tidy data
+library(tidyverse)
+
+# for ggplot
+library(directlabels)
+library(patchwork)
+library(ggbeeswarm)
+
+# for cross-validation folds
+library(caret)
+
+# for random forest
+library(randomForest)
+
+# for multivariate random forest
+library(MultivariateRandomForest)
+```
+
+Source files for error computation and plotting functions:
+```{r}
+source('scripts/Fire model/Fire_Functions.R')
+```
+
+# Univariate
+
+## Fitting
+A function to fit a Random Forest for the density and direction parameters, using 5-fold cross-validation.
+```{r}
+FireRFFitting <- function(data_clean,
+                       data_noise){
+  # data_clean: the data frame containing the input parameters as well as the relevant outputs
+  # data_noise: supply data with noise here
+  
+  # create the folds
+  flds <- createFolds(1:nrow(data_clean),
+                      k = 5, list = TRUE, returnTrain = FALSE)
+
+  # to store the results
+  results_df <- tibble(density = numeric(),
+                       directions = numeric(),
+                       density_pred = numeric(),
+                       directions_pred = numeric(),
+                       noise = character(),
+                       fold = numeric(),
+                       burn_end = numeric(),
+                       burn_middle = numeric())
+  
+  # for each cross-validation fold
+  for(i in 1:5){
+    # remove the test fold to create the training data
+    dat_train <- data_clean %>%
+      filter(!row_number() %in% unlist(flds[i]))
+    
+    # obtain the test fold without noise
+    dat_test_clean <- data_clean %>%
+        filter(row_number() %in% unlist(flds[i]))
+    # obtain the test fold with noise
+    dat_test_noise <- data_noise %>%
+        filter(row_number() %in% unlist(flds[i]))
+    
+    # train the random forest
+    fit_rf_density <- randomForest(density ~ . - directions,
+                                      data = dat_train,
+                                   ntree = 500)
+    fit_rf_directions <- randomForest(as.factor(directions) ~
+                                        . - density,
+                                      data = dat_train,
+                                      ntree = 500)
+    
+    # predict the density & directions in the left-out fold without noise
+    predict_rf_clean_density <- predict(fit_rf_density,
+                                        newdata = dat_test_clean)
+    predict_rf_clean_directions <-
+      as.numeric(as.character(predict(fit_rf_directions,
+                         newdata = dat_test_clean)))
+    
+    # predict the density & directions in the left-out fold with noise
+    predict_rf_noise_density <- predict(fit_rf_density,
+                                        newdata = dat_test_noise)
+    predict_rf_noise_directions <- 
+      as.numeric(as.character(predict(fit_rf_directions,
+                                      newdata = dat_test_noise)))
+    
+    # add the predictions to the data frame
+    results_new_clean <- tibble(density = dat_test_clean$density,
+                          directions = dat_test_clean$directions,
+                          density_pred = 
+                            predict_rf_clean_density,
+                          directions_pred = 
+                            predict_rf_clean_directions,
+                          fold = i,
+                          noise = 'clean',
+                          burn_end = dat_test_clean$end)
+    results_new_noise <- tibble(density = dat_test_clean$density,
+                                directions = dat_test_clean$directions,
+                                density_pred =
+                                  predict_rf_noise_density,
+                                directions_pred = 
+                                  predict_rf_noise_directions,
+                                fold = i,
+                                noise = 'noise',
+                                burn_end = dat_test_clean$end)
+    
+    if('middle' %in% colnames(dat_test_clean)){
+      results_new_clean <- results_new_clean %>%
+        mutate(burn_middle = dat_test_clean$middle)
+      results_new_noise <- results_new_noise %>%
+        mutate(burn_middle = dat_test_clean$middle)
+    } else {
+      results_new_clean <- results_new_clean %>%
+        mutate(burn_middle = NA)
+      results_new_noise <- results_new_noise %>%
+        mutate(burn_middle = NA)
+    }
+    
+    results_df <- results_df %>%
+      add_row(results_new_clean) %>%
+      add_row(results_new_noise)
+  }
+  
+  return(results_df)
+}
+```
+
+Timesteps, not summarised
+```{r}
+data_time_full_clean <-
+  read_csv('data/training/fire_time_full_clean.csv')
+data_time_full_outputnoise <-
+  read_csv('data/training/fire_time_full_outputnoise.csv')
+
+# fit regressions
+fit_data_time_full <-
+  FireRFFitting(data_time_full_clean,
+                 data_noise = data_time_full_outputnoise)
+```
+
+Timesteps, summarised
+```{r}
+data_time_sum_clean <-
+  read_csv('data/training/fire_time_sum_clean.csv')
+data_time_sum_outputnoise <-
+  read_csv('data/training/fire_time_sum_outputnoise.csv')
+
+fit_data_time_sum <-
+  FireRFFitting(data_time_sum_clean,
+                 data_noise = data_time_sum_outputnoise)
+```
+
+Endpoints, not summarised
+```{r}
+data_end_full_clean <-
+  read_csv('data/training/fire_end_full_clean.csv')
+data_end_full_outputnoise <-
+  read_csv('data/training/fire_end_full_outputnoise.csv')
+
+fit_data_end_full <-
+  FireRFFitting(data_end_full_clean,
+                 data_noise = data_end_full_outputnoise)
+```
+
+Endpoints, summarised
+```{r}
+data_end_sum_clean <- read_csv('data/training/fire_end_sum_clean.csv')
+data_end_sum_outputnoise <-
+  read_csv('data/training/fire_end_sum_outputnoise.csv')
+
+fit_data_end_sum <-
+  FireRFFitting(data_end_sum_clean,
+                 data_noise = data_end_sum_outputnoise)
+```
+
+Save everything in 1 dataframe:
+```{r}
+fit_all <- rbind(fit_data_time_full, fit_data_time_sum,
+                 fit_data_end_full, fit_data_end_sum)
+
+fit_all %>%
+  mutate(id = row_number()) %>%
+  pivot_longer(cols = c(burn_end, burn_middle),
+               names_to = 'time_label',
+               values_to = 'burn_percentage') %>%
+  separate(col = time_label,
+           into = c(NA, 'time_label'),
+           sep = '_') %>%
+  write_csv('data/raw/fire_rf_predictions.csv')
+```
+
+## Compute errors
+Run the fire ABM with the predicted parameter combinations to obtain the predicted output values.
+
+Import Python modules:
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import math
+import itertools
+import statistics
+sns.set_style('white')
+sns.set_context('talk')
+
+import pyNetLogo # to run NetLogo from RStudio
+```
+
+Link to and start the Fire model:
+```{python}
+netlogo = pyNetLogo.NetLogoLink(gui = True) # start netlogo
+
+netlogo.load_model(r"C:\Users\Femke Keij\OneDrive\Thesis\R projects\LU thesis GitHub\models\Fire_myversion.nlogo")
+# open model
+```
+
+```{python}
+df_vals = pd.read_csv('data/raw/fire_rf_predictions.csv')
+
+# select the relevant columns
+df_vals = df_vals[['density_pred', 'directions_pred','id']]
+# remove the duplicates created by the double time points
+df_vals = df_vals.drop_duplicates()
+df_vals = df_vals.reset_index()
+
+# create a dataframe for predicted burn percentages
+df_out = pd.DataFrame(columns = ['density_pred', 'directions_pred', 'burn_percentage_pred', 'tick', 'id'])
+# add empty row to start
+df_out = df_out.append({'density_pred': -100, 'directions_pred': -100, 'burn_percentage_pred': -100, 'tick': -100, 'id': -100}, ignore_index = True)
+
+# set random seed
+netlogo.command('clean')
+
+for i in range(0, len(df_vals)):
+  # set parameters
+  density = str(df_vals['density_pred'][i])
+  density_round = round(df_vals['density_pred'][i])
+  if not 0 <= density_round <= 99:
+    if density_round < 0:
+      density_round = 0
+    else:
+      density_round = 99
+  
+  directions = str(df_vals['directions_pred'][i])
+  netlogo.command(''.join(['set density ', str(density_round)]))
+  netlogo.command(''.join(['set directions ', directions]))
+  
+  # run
+  netlogo.command('setup')
+  initial = netlogo.report('initial-trees')
+  # execute 1 tick at a time, until everything is burned up
+  turtles = netlogo.report('count turtles')
+  while turtles != 0:
+    netlogo.command('go')
+    # record burn percentage
+    burned = netlogo.report('burned-trees')
+    perc_burn = burned / initial * 100
+    ticks = netlogo.report('ticks')
+    # store in data frame
+    df_out = df_out.append({'density_pred': int(density), 'directions_pred': int(directions), 'burn_percentage_pred': perc_burn, 'tick': ticks, 'id': df_vals.loc[i]['id']}, ignore_index = True)
+    # check turtles
+    turtles = netlogo.report('count turtles')
+
+# save resulting dataframe
+df_out.to_csv('data/raw/fire_rf_predictions_withoutputs.csv')
+```
+
+```{python}
+# stop running the ABM and exit the Python workspace
+netlogo.kill_workspace()
+quit
+```
+
+Read in the error data and split into appropriate dataframes
+```{r}
+errors2_data <- 
+  read_csv('data/raw/fire_rf_predictions_withoutputs.csv')
+errors1_data <- read_csv('data/raw/fire_rf_predictions.csv')
+
+# obtain middle and end datapoints for each run
+errors2_data <- errors2_data %>%
+  # remove first row and column (don't contain data)
+  slice(-1) %>%
+  select(-1) %>%
+  group_by(id) %>%
+  mutate(time_label = ifelse(tick == max(tick), 'end',
+                             ifelse(tick == floor(median(tick)),
+                                    'middle', '--'))) %>%
+  filter(time_label %in% c('middle', 'end'))
+
+# merge the dataframes so that all information is together in 1 again
+errors_data <- left_join(errors1_data, errors2_data,
+                         by = c('id', 'density_pred',
+                                'directions_pred', 'time_label'))
+
+fit_data_time_full <- errors_data %>%
+  filter(time_label %in% c('middle', 'end'),
+         datapoints == 'timepoints',
+         summarise_runs == 'full')
+
+fit_data_time_sum <- errors_data %>%
+  filter(time_label %in% c('middle', 'end'),
+         datapoints == 'timepoints',
+         summarise_runs == 'summarised')
+
+fit_data_end_full <- errors_data %>%
+  filter(time_label == 'end',
+         datapoints == 'endpoints',
+         summarise_runs == 'full')
+
+fit_data_end_sum <- errors_data %>%
+  filter(time_label == 'end',
+         datapoints == 'endpoints',
+         summarise_runs == 'summarised')
+```
+
+Perform error computations for each data set:
+
+Timesteps, not summarised
+```{r}
+# compute errors
+errors_data_time_full <- 
+  FireComputeErrors(fit_data_time_full,
+                    sample_size = 198,
+                    sample_method = 'full',
+                    summarise_runs = 'full',
+                    datapoints = 'timepoints')
+
+# dataframe to store all errors
+errors <- errors_data_time_full
+```
+
+Timesteps, summarised
+```{r}
+errors_data_time_sum <- 
+  FireComputeErrors(fit_data_time_sum,
+                    sample_size = 198,
+                    sample_method = 'full',
+                    summarise_runs = 'summarised',
+                    datapoints = 'timepoints')
+
+errors <- errors %>%
+  add_row(errors_data_time_sum)
+```
+
+Endpoints, not summarised
+```{r}
+errors_data_end_full <- 
+  FireComputeErrors(fit_data_end_full,
+                    sample_size = 198,
+                    sample_method = 'full',
+                    summarise_runs = 'full',
+                    datapoints = 'endpoints')
+
+errors <- errors %>%
+  add_row(errors_data_end_full)
+```
+
+Endpoints, summarised
+```{r}
+errors_data_end_sum <- 
+  FireComputeErrors(fit_data_end_sum,
+                    sample_size = 198,
+                    sample_method = 'full',
+                    summarise_runs = 'summarised',
+                    datapoints = 'endpoints')
+
+errors <- errors %>%
+  add_row(errors_data_end_sum)
+```
+
+Save results:
+```{r}
+errors %>%
+  mutate(algorithm = 'Random Forest') %>%
+  write_csv(file = 'data/results/fire_rf_errors.csv')
+```
+
+## Plots
+```{r}
+errors_long <- PrepErrorsForPlotting(errors)
+```
+
+```{r}
+plot1 <- PlotPercCorrectParams(errors_long)
+
+ggsave('figures/fire_rf_perc_correct.pdf',
+       height = 20, width = 20, units = 'cm')
+```
+
+```{r}
+plot2 <- PlotErrorsDensity(errors_long)
+
+ggsave('figures/fire_rf_density.pdf',
+       height = 10, width = 20, units = 'cm')
+```
+
+```{r}
+plot3 <- PlotErrorsDirections(errors_long)
+
+ggsave('figures/fire_rf_directions.pdf',
+       height = 15, width = 20, units = 'cm')
+```
+
+# Multivariate
+Clear working directory:
+```{r}
+rm(list = ls(all = TRUE))
+
+set.seed(405)
+```
+
+## Fitting
+A function to fit a Multivariate Random Forest for the density and direction parameters, using 5-fold cross-validation.
+```{r}
+FireMRFFitting <- function(data_clean,
+                       data_noise){
+  # data_clean: the data frame containing the input parameters as well as the relevant outputs
+  # data_noise: supply data with noise here
+  
+  # create the folds
+  flds <- createFolds(1:nrow(data_clean),
+                      k = 5, list = TRUE, returnTrain = FALSE)
+
+  # to store the results
+  results_df <- tibble(density = numeric(),
+                       directions = numeric(),
+                       density_pred = numeric(),
+                       directions_pred = numeric(),
+                       noise = character(),
+                       fold = numeric(),
+                       burn_middle = numeric(),
+                       burn_end = numeric())
+  
+  # turn directions variable into a dummy
+  data_clean <- data_clean %>%
+    mutate(true_four = ifelse(directions == 4, 1, 0))
+  data_noise <- data_noise %>%
+    mutate(true_four = ifelse(directions == 4, 1, 0))
+  
+  # for each cross-validation fold
+  for(i in 1:5){
+    # remove the test fold to create the training data
+    dat_train <- data_clean %>%
+      filter(!row_number() %in% unlist(flds[i]))
+    trainX <- dat_train %>%
+      select(- c(density, true_four, directions))
+    trainY <- dat_train %>%
+      select(density, true_four)
+    
+    # obtain the test fold without noise
+    dat_test_clean <- data_clean %>%
+        filter(row_number() %in% unlist(flds[i]))
+    testX_clean <- dat_test_clean %>%
+      select(- c(density, true_four, directions))
+    # obtain the test fold with noise
+    dat_test_noise <- data_noise %>%
+        filter(row_number() %in% unlist(flds[i]))
+    testX_noise <- dat_test_noise %>%
+      select(- c(density, true_four, directions))
+    
+    # train the multivariate random forest and predict
+    #   the test sets
+    pred_mrf_clean <- build_forest_predict(trainX = as.matrix(trainX),
+                                           trainY = as.matrix(trainY),
+                                           n_tree = 10,
+                                           min_leaf = 5,
+                                           m_feature = 3,
+                                           testX =
+                                             as.matrix(testX_clean))
+    pred_mrf_noise <- build_forest_predict(trainX = as.matrix(trainX),
+                                           trainY = as.matrix(trainY),
+                                           n_tree = 10,
+                                           m_feature = 3,
+                                           min_leaf = 5,
+                                           testX =
+                                             as.matrix(testX_noise))
+    
+    # add the predictions to the data frame
+    results_new_clean <- tibble(density = dat_test_clean$density,
+                          directions = dat_test_clean$directions,
+                          density_pred = 
+                            pred_mrf_clean[, 1],
+                          directions_pred = 
+                            pred_mrf_clean[, 2],
+                          fold = i,
+                          noise = 'clean',
+                          burn_end = dat_test_clean$end) %>%
+      mutate(directions_pred = ifelse(directions_pred >= 0.5, 4, 8))
+    
+    results_new_noise <- tibble(density = dat_test_clean$density,
+                                directions = dat_test_clean$directions,
+                                density_pred =
+                                  pred_mrf_noise[, 1],
+                                directions_pred = 
+                                  pred_mrf_noise[, 2],
+                                fold = i,
+                                noise = 'noise',
+                                burn_end = dat_test_clean$end) %>%
+      mutate(directions_pred = ifelse(directions_pred >= 0.5, 4, 8))
+    
+    if('middle' %in% colnames(dat_test_clean)){
+      results_new_clean <- results_new_clean %>%
+        mutate(burn_middle = dat_test_clean$middle)
+      results_new_noise <- results_new_noise %>%
+        mutate(burn_middle = dat_test_clean$middle)
+    } else {
+      results_new_clean <- results_new_clean %>%
+        mutate(burn_middle = NA)
+      results_new_noise <- results_new_noise %>%
+        mutate(burn_middle = NA)
+    }
+    
+    results_df <- results_df %>%
+      add_row(results_new_clean) %>%
+      add_row(results_new_noise)
+  }
+  
+  return(results_df)
+}
+```
+
+Timesteps, not summarised
+```{r}
+data_time_full_clean <-
+  read_csv('data/training/fire_time_full_clean.csv')
+data_time_full_outputnoise <-
+  read_csv('data/training/fire_time_full_outputnoise.csv')
+
+# fit regressions
+fit_data_time_full <-
+  FireMRFFitting(data_time_full_clean,
+                 data_noise = data_time_full_outputnoise)
+```
+
+Timesteps, summarised
+```{r}
+data_time_sum_clean <-
+  read_csv('data/training/fire_time_sum_clean.csv')
+data_time_sum_outputnoise <-
+  read_csv('data/training/fire_time_sum_outputnoise.csv')
+
+fit_data_time_sum <-
+  FireMRFFitting(data_time_sum_clean,
+                 data_noise = data_time_sum_outputnoise)
+```
+
+Endpoints, not summarised
+```{r}
+data_end_full_clean <-
+  read_csv('data/training/fire_end_full_clean.csv')
+data_end_full_outputnoise <-
+  read_csv('data/training/fire_end_full_outputnoise.csv')
+
+fit_data_end_full <-
+  FireMRFFitting(data_end_full_clean,
+                 data_noise = data_end_full_outputnoise)
+```
+
+Endpoints, summarised
+```{r}
+data_end_sum_clean <- read_csv('data/training/fire_end_sum_clean.csv')
+data_end_sum_outputnoise <-
+  read_csv('data/training/fire_end_sum_outputnoise.csv')
+
+fit_data_end_sum <-
+  FireMRFFitting(data_end_sum_clean,
+                 data_noise = data_end_sum_outputnoise)
+```
+
+Save everything in 1 dataframe:
+```{r}
+fit_all <- rbind(fit_data_time_full, fit_data_time_sum,
+                 fit_data_end_full, fit_data_end_sum)
+
+fit_all %>%
+  mutate(id = row_number()) %>%
+  pivot_longer(cols = c(burn_end, burn_middle),
+               names_to = 'time_label',
+               values_to = 'burn_percentage') %>%
+  separate(col = time_label,
+           into = c(NA, 'time_label'),
+           sep = '_') %>%
+  write_csv('data/raw/fire_mrf_predictions.csv')
+```
+
+## Compute errors
+Run the fire ABM with the predicted parameter combinations to obtain the predicted output values.
+
+Import Python modules:
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import math
+import itertools
+import statistics
+sns.set_style('white')
+sns.set_context('talk')
+
+import pyNetLogo # to run NetLogo from RStudio
+```
+
+Link to and start the Fire model:
+```{python}
+netlogo = pyNetLogo.NetLogoLink(gui = True) # start netlogo
+
+netlogo.load_model(r"C:\Users\Femke Keij\OneDrive\Thesis\R projects\LU thesis GitHub\models\Fire_myversion.nlogo")
+# open model
+```
+
+```{python}
+df_vals = pd.read_csv('data/raw/fire_mrf_predictions.csv')
+
+# select the relevant columns
+df_vals = df_vals[['density_pred', 'directions_pred','id']]
+# remove the duplicates created by the double time points
+df_vals = df_vals.drop_duplicates()
+df_vals = df_vals.reset_index()
+
+# create a dataframe for predicted burn percentages
+df_out = pd.DataFrame(columns = ['density_pred', 'directions_pred', 'burn_percentage_pred', 'tick', 'id'])
+# add empty row to start
+df_out = df_out.append({'density_pred': -100, 'directions_pred': -100, 'burn_percentage_pred': -100, 'tick': -100, 'id': -100}, ignore_index = True)
+
+# set random seed
+netlogo.command('clean')
+
+for i in range(0, len(df_vals)):
+  # set parameters
+  density = str(df_vals['density_pred'][i])
+  density_round = round(df_vals['density_pred'][i])
+  if not 0 <= density_round <= 99:
+    if density_round < 0:
+      density_round = 0
+    else:
+      density_round = 99
+  
+  directions = str(df_vals['directions_pred'][i])
+  netlogo.command(''.join(['set density ', str(density_round)]))
+  netlogo.command(''.join(['set directions ', directions]))
+  
+  # run
+  netlogo.command('setup')
+  initial = netlogo.report('initial-trees')
+  # execute 1 tick at a time, until everything is burned up
+  turtles = netlogo.report('count turtles')
+  while turtles != 0:
+    netlogo.command('go')
+    # record burn percentage
+    burned = netlogo.report('burned-trees')
+    perc_burn = burned / initial * 100
+    ticks = netlogo.report('ticks')
+    # store in data frame
+    df_out = df_out.append({'density_pred': int(density), 'directions_pred': int(directions), 'burn_percentage_pred': perc_burn, 'tick': ticks, 'id': df_vals.loc[i]['id']}, ignore_index = True)
+    # check turtles
+    turtles = netlogo.report('count turtles')
+
+# save resulting dataframe
+df_out.to_csv('data/raw/fire_mrf_predictions_withoutputs.csv')
+```
+
+```{python}
+# stop running the ABM and exit the Python workspace
+netlogo.kill_workspace()
+quit
+```
+
+Read in the error data and split into appropriate dataframes
+```{r}
+errors2_data <- 
+  read_csv('data/raw/fire_mrf_predictions_withoutputs.csv')
+errors1_data <- read_csv('data/raw/fire_mrf_predictions.csv')
+
+# obtain middle and end datapoints for each run
+errors2_data <- errors2_data %>%
+  # remove first row and column (don't contain data)
+  slice(-1) %>%
+  select(-1) %>%
+  group_by(id) %>%
+  mutate(time_label = ifelse(tick == max(tick), 'end',
+                             ifelse(tick == floor(median(tick)),
+                                    'middle', '--'))) %>%
+  filter(time_label %in% c('middle', 'end'))
+
+# merge the dataframes so that all information is together in 1 again
+errors_data <- left_join(errors1_data, errors2_data,
+                         by = c('id', 'density_pred',
+                                'directions_pred', 'time_label'))
+
+fit_data_time_full <- errors_data %>%
+  filter(time_label %in% c('middle', 'end'),
+         datapoints == 'timepoints',
+         summarise_runs == 'full')
+
+fit_data_time_sum <- errors_data %>%
+  filter(time_label %in% c('middle', 'end'),
+         datapoints == 'timepoints',
+         summarise_runs == 'summarised')
+
+fit_data_end_full <- errors_data %>%
+  filter(time_label == 'end',
+         datapoints == 'endpoints',
+         summarise_runs == 'full')
+
+fit_data_end_sum <- errors_data %>%
+  filter(time_label == 'end',
+         datapoints == 'endpoints',
+         summarise_runs == 'summarised')
+```
+
+Perform error computations for each data set:
+
+Timesteps, not summarised
+```{r}
+# compute errors
+errors_data_time_full <- 
+  FireComputeErrors(fit_data_time_full,
+                    sample_size = 198,
+                    sample_method = 'full',
+                    summarise_runs = 'full',
+                    datapoints = 'timepoints')
+
+# dataframe to store all errors
+errors <- errors_data_time_full
+```
+
+Timesteps, summarised
+```{r}
+errors_data_time_sum <- 
+  FireComputeErrors(fit_data_time_sum,
+                    sample_size = 198,
+                    sample_method = 'full',
+                    summarise_runs = 'summarised',
+                    datapoints = 'timepoints')
+
+errors <- errors %>%
+  add_row(errors_data_time_sum)
+```
+
+Endpoints, not summarised
+```{r}
+errors_data_end_full <- 
+  FireComputeErrors(fit_data_end_full,
+                    sample_size = 198,
+                    sample_method = 'full',
+                    summarise_runs = 'full',
+                    datapoints = 'endpoints')
+
+errors <- errors %>%
+  add_row(errors_data_end_full)
+```
+
+Endpoints, summarised
+```{r}
+errors_data_end_sum <- 
+  FireComputeErrors(fit_data_end_sum,
+                    sample_size = 198,
+                    sample_method = 'full',
+                    summarise_runs = 'summarised',
+                    datapoints = 'endpoints')
+
+errors <- errors %>%
+  add_row(errors_data_end_sum)
+```
+
+Save results:
+```{r}
+errors %>%
+  mutate(algorithm = 'Multivariate Random Forest') %>%
+  write_csv(file = 'data/results/fire_mrf_errors.csv')
+```
+
+## Plots
+```{r}
+errors_long <- PrepErrorsForPlotting(errors)
+```
+
+```{r}
+plot1 <- PlotPercCorrectParams(errors_long)
+
+ggsave('figures/fire_mrf_perc_correct.pdf',
+       height = 20, width = 20, unit = 'cm')
+```
+
+```{r}
+plot2 <- PlotErrorsDensity(errors_long)
+
+ggsave('figures/fire_mrf_density.pdf',
+       height = 10, width = 20, unit = 'cm')
+```
+
+```{r}
+plot3 <- PlotErrorsDirections(errors_long)
+
+ggsave('figures/fire_mrf_directions.pdf',
+       height = 20, width = 20, unit = 'cm')
+```

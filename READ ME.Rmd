@@ -1,0 +1,65 @@
+---
+title: "READ ME"
+author: "Femke Keij S2647168"
+date: "2023-02-14"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Repository for Leiden University MSc thesis by Femke Keij on the performance of different machine learning algorithms and methodologies for the calibration of Agent-Based Models in Ecology.
+
+The final thesis can be found in the `documentation` folder and details the full project.
+
+# FILE STRUCTURE
+To replicate the results, one only has to access the `scripts` folder and download the `models` folder. These will automatically produce the files found in the `data` and `figures` folders.
+
+## documentation
+Folder containing
+- `Thesis.pdf` the final thesis
+- `Poster.pdf` the poster presented at NAEM 2024
+- `` the presentation from the thesis defence (will be added by March 13th 2024).
+
+## scripts
+Folder containing all necessary scripts to replicate the results in the thesis.
+
+`pynetlogo.py` contains python code for installing PyNetLogo.
+
+The `Fire model` folder contains the 
+- `Fire_01_Run_ABM.Rmd`
+- `Fire_02_Inspect_ABM.Rmd`
+- `Fire_03_Create_TrainingData.Rmd`
+- `Fire_04_Training_SimpleRegression.Rmd`
+- `Fire_05_Calibration_PLS.Rmd`
+- `Fire_06_RandomForest.Rmd` (this also contains the code for the multivariate random forest)
+- `Fire_07_Evaluate_performance.Rmd`
+scripts that can be run in order to do all the preliminary investigations on the Fire ABM, train the algorithms, and then evaluate their performance within the Fire ABM. The `Fire_Functions.R` script contains some of the functions that are shared across the rest of the files.
+
+The `WolfSheep model` folder contains:
+- `WolfSheep_01_Run_ABM.Rmd`
+- `WolfSheep_02_Inspect_ABM.Rmd`
+- `WolfSheep_03_Create_TrainingData.Rmd`
+- `WolfSheep_04_Training_SimpleRegression.Rmd`
+- `WolfSheep_05_Training_PLS.Rmd`
+- `WolfSheep_06_Training_RandomForest.Rmd` (this also contains the code for the multivariate random forest)
+- `WolfSheep_08_Evaluate_Performance.Rmd`
+scripts that can be run in order to do all the preliminary investigations on the Wolf Sheep Predation ABM, train the algorithms, and then evaluate their performance within the Wolf Sheep Predation ABM. The `WolfSheep_Functions.R` script contains some of the functions that are shared across the rest of the files.
+
+`Overall_Comparison_ResultsSection.Rmd` contains code used to compare algorithms across ABMs to produce the numbers and graphs in the results section. This should be run after running all the code in the `Fire model` and `WolfSheep model` folders.
+
+## data
+`processed` contains data at various stages between the ABM output and the finalized training data.
+
+`raw` contains all data as output directly by the Fire and Wolf Sheep Predation ABMs. By utilizing these you can skip the `...01_Run_ABM.Rmd` scripts and only execute the ABM inspection and the training of the algorithms.
+
+`results` contains the results of the error computations for each algorithm and ABM. By utilizing these you can skip all scripts up to `...Evaluate_Performance.Rmd` and only execute the performance evaluations.
+
+`training` contains the data frames used to train the algorithms per ABM. By utilizing these you can skip all scripts up to `...04_Training_SimpleRegression.Rmd` and only execute the training of the algorithms.
+
+## figures
+All figures produced by running the scripts.
+
+## models
+Contains the Fire ABM (`Fire_myversion.nlogo`) and the Wolf Sheep Predation ABM (`WolfSheep_myversion.nlogo`) as used in the thesis. The Wolf Sheep Predation ABM is identical to the one in the NetLogo Models Library, the Fire ABM has an added 'directions' variable.

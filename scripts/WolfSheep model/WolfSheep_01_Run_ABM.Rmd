@@ -1,0 +1,1059 @@
+---
+title: "WolfSheep_00_Run_Model"
+author: "Femke Keij S2647168"
+date: "2023-03-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Import Python modules:
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import math
+import statistics
+import itertools
+sns.set_style('white')
+sns.set_context('talk')
+
+import pyNetLogo # to run NetLogo from RStudio
+```
+
+Import R packages:
+```{r}
+# for importing / working with tidy data
+library(tidyverse)
+# for arranging plots
+library(patchwork)
+# for cumulative computations
+library(zoo)
+# for rolling averages
+library(slider)
+# for latin hypercube sampling
+library(lhs)
+```
+
+Set seed:
+```{r}
+set.seed(42)
+```
+
+Link to and start the wolf-sheep-grass model:
+```{python}
+netlogo = pyNetLogo.NetLogoLink(gui = True) # start netlogo
+
+netlogo.load_model(r"C:\Users\Femke Keij\OneDrive\Thesis\R projects\LU thesis local\models\WolfSheep_myversion.nlogo")
+# open model
+
+# set to correct model version
+netlogo.command('set model-version "sheep-wolves-grass"')
+```
+
+# Decide on model outputs
+I'll use the number of sheep, number of wolves, and amount of grass as outputs. I'm recording them at each tick for 500 ticks.
+
+# Determine number of runs
+1) coefficient of variation
+2) mean convergence
+3) windowed variance
+
+Optionally, we can set a separate convergence boundary $\epsilon$ for each output. This is only necessary when the outputs are on different scales, which is not the case here. I choose $\epsilon_{c_\upsilon} = 0.1$, $\epsilon_\mu = 1$, and $\epsilon_{\omega^2} = 0.2$.
+
+We can compute all these statistics using just 1 data set. To do so, we run each parameter combination 50 times and save the outputs at time step 100 (this is an arbitrary choice that should potentially be remedied later to include the time steps etc. that I'm actually going to use).
+
+Instead of combining a low, mid, and high value for each parameter, I use only the 25% and 75% quartile of each range. This brings the number of parameter combinations down from 2187 to 128.
+```{python}
+initial_number_sheep = [62, 188]
+initial_number_wolves = [62, 188]
+sheep_gain_from_food = [12, 38]
+wolf_gain_from_food = [25, 72]
+sheep_reproduce = [5, 15]
+wolf_reproduce = [5, 15]
+grass_regrowth = [25, 72]
+
+dictionary = {'initial_number_sheep': [62, 188], 'initial_number_wolves': [62, 188], 'sheep_gain_from_food': [12, 38], 'wolf_gain_from_food': [25, 72], 'sheep_reproduce': [5, 15], 'wolf_reproduce': [5, 15], 'grass_regrowth': [25, 72]}
+
+def expand_grid(data_dict):
+    rows = itertools.product(*data_dict.values())
+    return pd.DataFrame.from_records(rows, columns = data_dict.keys())
+
+param_comb = expand_grid(dictionary)
+```
+
+Obtain all necessary data:
+```{python}
+# data frame to store results
+out_df = pd.DataFrame(columns = ['initial_number_sheep', 'initial_number_wolves', 'sheep_gain_from_food', 'wolf_gain_from_food', 'sheep_reproduce', 'wolf_reproduce', 'grass_regrowth', 'run', 'wolves', 'sheep', 'grass', 'tick'])
+# add empty row to start
+out_df = out_df.append({'initial_number_sheep': 0, 'initial_number_wolves': 0, 'sheep_gain_from_food': 0, 'wolf_gain_from_food': 0, 'sheep_reproduce': 0, 'wolf_reproduce': 0, 'grass_regrowth': 0, 'run': 0, 'sheep': -100, 'wolves': -100, 'grass': -100, 'tick': - 100}, ignore_index = True)
+
+# set counter
+count = 0
+# set random seed
+netlogo.command('clean')
+
+for i in range(0,len(param_comb)):
+  # set parameters
+  initial_number_sheep = str(param_comb['initial_number_sheep'][i])
+  initial_number_wolves = str(param_comb['initial_number_wolves'][i])
+  sheep_gain_from_food = str(param_comb['sheep_gain_from_food'][i])
+  wolf_gain_from_food = str(param_comb['wolf_gain_from_food'][i])
+  sheep_reproduce = str(param_comb['sheep_reproduce'][i])
+  wolf_reproduce = str(param_comb['wolf_reproduce'][i])
+  grass_regrowth = str(param_comb['grass_regrowth'][i])
+  netlogo.command(''.join(['set initial-number-sheep ', initial_number_sheep]))
+  netlogo.command(''.join(['set initial-number-wolves ', initial_number_wolves]))
+  netlogo.command(''.join(['set  sheep-gain-from-food ',  sheep_gain_from_food]))
+  netlogo.command(''.join(['set wolf-gain-from-food ',  wolf_gain_from_food]))
+  netlogo.command(''.join(['set sheep-reproduce ', sheep_reproduce]))
+  netlogo.command(''.join(['set wolf-reproduce ', wolf_reproduce]))
+  netlogo.command(''.join(['set grass-regrowth-time ', grass_regrowth]))
+  
+  for x in range(0, 50):
+    # setup
+    netlogo.command('setup')
+    # execute for 50 ticks, 3 times
+    for j in [50, 100, 150]:
+      netlogo.command('repeat 50 [go]')
+      # record sheep, wolves, grass
+      sheep = netlogo.report('count sheep')
+      wolves = netlogo.report('count wolves')
+      grass = netlogo.report ('count grass')
+      # store
+      out_df = out_df.append({'initial_number_sheep': initial_number_sheep, 'initial_number_wolves': initial_number_wolves, 'sheep_gain_from_food': sheep_gain_from_food, 'wolf_gain_from_food': wolf_gain_from_food, 'sheep_reproduce': sheep_reproduce, 'wolf_reproduce': wolf_reproduce, 'grass_regrowth': grass_regrowth, 'run': x + 1, 'sheep': sheep, 'wolves': wolves, 'grass': grass, 'tick': j}, ignore_index = True)
+
+out_df.to_csv('data/raw/wolfsheep_numruns.csv')
+```
+
+Compute statistics:
+```{r}
+numruns <- read.csv('data/raw/wolfsheep_numruns.csv')
+
+# remove first row
+numruns <- numruns %>%
+  slice(-1)
+
+# add a unique number for each parameter combination
+numruns <- numruns %>%
+  group_by(initial_number_sheep, initial_number_wolves, sheep_gain_from_food,
+           wolf_gain_from_food, sheep_reproduce, wolf_reproduce, grass_regrowth) %>%
+  mutate(combination_number = cur_group_id())
+
+# pivot to wide format
+numruns_wide <- numruns %>%
+  select(- X) %>%
+  pivot_wider(names_from = tick,
+              values_from = c(sheep, wolves, grass))
+```
+
+1) Mean convergence
+With $\epsilon_\mu = 1$
+```{r}
+numruns <- numruns %>%
+  group_by(combination_number, tick) %>%
+  # compute cumulative means
+  # and differences between means
+  mutate(mean_sheep = cummean(sheep),
+         mean_wolves = cummean(wolves),
+         mean_grass = cummean(grass),
+         mean_diff_sheep = mean_sheep - 
+           lag(mean_sheep, default = mean_sheep[1]),
+         mean_diff_wolves = mean_wolves -
+           lag(mean_wolves, default = mean_wolves[1]),
+         mean_diff_grass = mean_grass -
+           lag(mean_grass, default = mean_grass[1]))
+
+# compute at which point the mean difference settles below 1
+mean_conv_sheep <- numruns %>%
+  group_by(combination_number, tick) %>%
+  filter(abs(mean_diff_sheep) < 1,
+         run != 1) %>%
+  slice(which.min(run))
+
+mean_conv_wolves <- numruns %>%
+  group_by(combination_number, tick) %>%
+  filter(abs(mean_diff_wolves) < 1,
+         run != 1) %>%
+  slice(which.min(run))
+
+mean_conv_grass <- numruns %>%
+  group_by(combination_number, tick) %>%
+  filter(abs(mean_diff_grass) < 1,
+         run != 1) %>%
+  slice(which.min(run))
+
+# plot for sheep
+p1_sheep <- numruns %>%
+  ggplot(mapping = aes(x = run, y = mean_diff_sheep,
+                       group = combination_number)) +
+  geom_line(alpha = 0.5) +
+  geom_hline(yintercept = 1, colour = 'darkgreen') +
+  geom_hline(yintercept = - 1, colour = 'darkgreen') +
+  labs(y = 'difference mean number',
+       title = 'sheep')
+
+p2_sheep <- mean_conv_sheep %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(mean_conv_sheep$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(mean_conv_sheep$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(mean_conv_sheep$run) + 1, y = 50,
+           colour = 'darkgreen', angle = 90) +
+  annotate(geom = 'text', label = 'median',
+           x = median(mean_conv_sheep$run) + 1, y = 50,
+           colour = 'darkblue', angle = 90) +
+  labs(y = 'count')
+
+# plot for wolves
+p1_wolves <- numruns %>%
+  ggplot(mapping = aes(x = run, y = mean_diff_wolves,
+                       group = combination_number)) +
+  geom_line(alpha = 0.5) +
+  geom_hline(yintercept = 1, colour = 'darkgreen') +
+  geom_hline(yintercept = - 1, colour = 'darkgreen') +
+  labs(x = 'runs added',
+       y = 'difference mean number',
+       title = 'wolves')
+
+p2_wolves <- mean_conv_wolves %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(mean_conv_wolves$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(mean_conv_wolves$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(mean_conv_wolves$run) + 1, y = 40,
+           colour = 'darkgreen', angle = 90) +
+  annotate(geom = 'text', label = 'median',
+           x = median(mean_conv_wolves$run) - 1, y = 40,
+           colour = 'darkblue', angle = 90) +
+  labs(y = 'count',
+       x = 'number of runs until mean convergence')
+
+# plot for grass
+p1_grass <- numruns %>%
+  ggplot(mapping = aes(x = run, y = mean_diff_grass,
+                       group = combination_number)) +
+  geom_line(alpha = 0.5) +
+  geom_hline(yintercept = 1, colour = 'darkgreen') +
+  geom_hline(yintercept = - 1, colour = 'darkgreen') +
+  labs(y = 'difference mean number',
+       title = 'grass')
+
+p2_grass <- mean_conv_grass %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(mean_conv_grass$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(mean_conv_grass$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(mean_conv_grass$run) + 1, y = 40,
+           colour = 'darkgreen', angle = 90) +
+  annotate(geom = 'text', label = 'median',
+           x = median(mean_conv_grass$run) - 1, y = 40,
+           colour = 'darkblue', angle = 90) +
+  labs(y = 'count')
+
+# plot all together
+mean_conv_plot <- (p1_sheep + p1_wolves + p1_grass) /
+  (p2_sheep + p2_wolves + p2_grass) +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = '1') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, colour = 'lightgrey'))
+
+mean_conv_plot[[1]][[1]] <- mean_conv_plot[[1]][[1]] +
+  theme(axis.title.x = element_blank())
+mean_conv_plot[[1]][[2]] <- mean_conv_plot[[1]][[2]] +
+  theme(axis.title.y = element_blank())
+mean_conv_plot[[1]][[3]] <- mean_conv_plot[[1]][[3]] +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+
+mean_conv_plot[[2]][[1]] <- mean_conv_plot[[2]][[1]] +
+  theme(axis.title.x = element_blank())
+mean_conv_plot[[2]][[2]] <- mean_conv_plot[[2]][[2]] +
+  theme(axis.title.y = element_blank())
+mean_conv_plot[[2]][[3]] <- mean_conv_plot[[2]][[3]] +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+```
+
+2) Coefficient of variation
+With $\epsilon_{c_\upsilon} = 0.1$.
+```{r}
+numruns <- numruns %>%
+  group_by(combination_number) %>%
+  # compute cumulative standard deviations
+  # compute coefficient of variation
+  mutate(sd_sheep = rollapplyr(sheep, 1:n(), sd),
+         sd_wolves = rollapplyr(wolves, 1:n(), sd),
+         sd_grass = rollapplyr(grass, 1:n(), sd),
+         cv_sheep = sd_sheep / mean_sheep,
+         cv_wolves = sd_wolves / mean_wolves,
+         cv_grass = sd_grass / mean_grass) %>%
+  # replace all Inf with NA (resulting from mean = 0)
+  mutate(cv_sheep = ifelse(abs(cv_sheep) == Inf, NA, cv_sheep),
+         cv_wolves = ifelse(abs(cv_wolves) == Inf, NA, cv_wolves),
+         cv_grass = ifelse(abs(cv_grass) == Inf, NA, cv_grass)) %>%
+  # replace all NAs (resulting from sd = 0 or mean = 0) with 0
+  replace(is.na(.), 0) %>%
+  # compute differences in cvs
+  mutate(cv_diff_sheep = cv_sheep - lag(cv_sheep,
+                                        default = cv_sheep[1]),
+         cv_diff_wolves = cv_wolves - lag(cv_wolves,
+                                          default = cv_wolves[1]),
+         cv_diff_grass = cv_grass - lag(cv_grass,
+                                        default = cv_grass[1]))
+  
+# compute at which point the mean difference settles below 1
+cv_conv_sheep <- numruns %>%
+  group_by(combination_number) %>%
+  filter(abs(cv_diff_sheep) < 0.1,
+         run != 1) %>%
+  slice(which.min(run))
+
+cv_conv_wolves <- numruns %>%
+  group_by(combination_number) %>%
+  filter(abs(cv_diff_wolves) < 0.1,
+         run != 1) %>%
+  slice(which.min(run))
+
+cv_conv_grass <- numruns %>%
+  group_by(combination_number) %>%
+  filter(abs(cv_diff_grass) < 0.1,
+         run != 1) %>%
+  slice(which.min(run))
+
+# plot for sheep
+p1_sheep <- numruns %>%
+  ggplot(mapping = aes(x = run, y = cv_diff_sheep,
+                       group = combination_number)) +
+  geom_line(alpha = 0.5) +
+  geom_hline(yintercept = 0.1, colour = 'darkgreen') +
+  geom_hline(yintercept = - 0.1, colour = 'darkgreen') +
+  labs(x = 'added runs',
+       y = 'cv',
+       title = 'sheep') +
+  facet_grid(~ tick)
+
+p2_sheep <- cv_conv_sheep %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(cv_conv_sheep$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(cv_conv_sheep$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(cv_conv_sheep$run) + 1, y = 20,
+           colour = 'darkgreen', angle = 90) +
+  annotate(geom = 'text', label = 'median',
+           x = median(cv_conv_sheep$run) - 1.5, y = 20,
+           colour = 'darkblue', angle = 90) +
+  labs(y = 'count',
+       x = 'number of runs until cv convergence')
+
+# plot for wolves
+p1_wolves <- numruns %>%
+  ggplot(mapping = aes(x = run, y = cv_diff_wolves,
+                       group = combination_number)) +
+  geom_line(alpha = 0.5) +
+  geom_hline(yintercept = 0.1, colour = 'darkgreen') +
+  geom_hline(yintercept = - 0.1, colour = 'darkgreen') +
+  labs(x = 'added runs',
+       y = 'difference cv',
+       title = 'wolves') +
+  facet_grid(~ tick)
+
+p2_wolves <- cv_conv_wolves %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(cv_conv_wolves$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(cv_conv_wolves$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(cv_conv_wolves$run) + 1, y = 20,
+           colour = 'darkgreen', angle = 90) +
+  annotate(geom = 'text', label = 'median',
+           x = median(cv_conv_wolves$run) - 1.5, y = 20,
+           colour = 'darkblue', angle = 90) +
+  labs(y = 'count',
+       x = 'number of runs until cv convergence')
+
+# plot for grass
+p1_grass <- numruns %>%
+  ggplot(mapping = aes(x = run, y = cv_diff_grass,
+                       group = combination_number)) +
+  geom_line(alpha = 0.5) +
+  geom_hline(yintercept = 0.1, colour = 'darkgreen') +
+  geom_hline(yintercept = - 0.1, colour = 'darkgreen') +
+  labs(x = 'added runs',
+       y = 'difference cv',
+       title = 'grass') +
+  facet_grid(~ tick)
+
+p2_grass <- cv_conv_grass %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(cv_conv_grass$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(cv_conv_grass$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(cv_conv_grass$run) + 1, y = 20,
+           colour = 'darkgreen', angle = 90) +
+  annotate(geom = 'text', label = 'median',
+           x = median(cv_conv_grass$run) - 1, y = 20,
+           colour = 'darkblue', angle = 90) +
+  labs(y = 'count',
+       x = 'number of runs until cv convergence')
+
+# plot all together
+cv_conv_plot <- (p1_sheep + p1_wolves + p1_grass) /
+  (p2_sheep + p2_wolves + p2_grass) +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = '1') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, colour = 'lightgrey'))
+
+cv_conv_plot[[1]][[1]] <- cv_conv_plot[[1]][[1]] +
+  theme(axis.title.x = element_blank())
+cv_conv_plot[[1]][[2]] <- cv_conv_plot[[1]][[2]] +
+  theme(axis.title.y = element_blank())
+cv_conv_plot[[1]][[3]] <- cv_conv_plot[[1]][[3]] +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+
+cv_conv_plot[[2]][[1]] <- cv_conv_plot[[2]][[1]] +
+  theme(axis.title.x = element_blank())
+cv_conv_plot[[2]][[2]] <- cv_conv_plot[[2]][[2]] +
+  theme(axis.title.y = element_blank())
+cv_conv_plot[[2]][[3]] <- cv_conv_plot[[2]][[3]] +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+```
+
+3) Windowed variance / relative outer variance
+Width of window: 10 runs
+With $\epsilon_\omega^2 = 0.2$
+```{r}
+numruns <- numruns %>% 
+  group_by(combination_number) %>% 
+  mutate(windowed_var_sheep = slider::slide_dbl(sheep, var, .before = 5, .after = 5),
+         windowed_var_wolves = slider::slide_dbl(wolves, var, .before = 5, .after = 5),
+         windowed_var_grass = slider::slide_dbl(grass, var, .before = 5, .after = 5),
+         relative_outer_var_sheep = windowed_var_sheep / max(windowed_var_sheep),
+         relative_outer_var_wolves = windowed_var_wolves / max(windowed_var_wolves),
+         relative_outer_var_grass = windowed_var_grass / max(windowed_var_grass)) %>%
+  # there's a few instances where the relative outer variance is NaN because the population
+  # is 0, therefore, we set those to 0 instead of NaN
+  mutate_at(vars(relative_outer_var_sheep,
+                 relative_outer_var_grass,
+                 relative_outer_var_wolves), ~ replace(., is.nan(.), 0))
+
+# compute at which point the relative outer variance settles below 0.2
+omega_conv_sheep <- numruns %>%
+  group_by(combination_number) %>%
+  filter(abs(relative_outer_var_sheep) < 0.2,
+         run != 1) %>%
+  slice(which.min(run))
+
+omega_conv_wolves <- numruns %>%
+  group_by(combination_number) %>%
+  filter(abs(relative_outer_var_wolves) < 0.2,
+         run != 1) %>%
+  slice(which.min(run))
+
+omega_conv_grass <- numruns %>%
+  group_by(combination_number) %>%
+  filter(abs(relative_outer_var_grass) < 0.2,
+         run != 1) %>%
+  slice(which.min(run)) 
+
+# plot for sheep
+p1_sheep <- numruns %>%
+  ggplot(mapping = aes(x = run, y = relative_outer_var_sheep,
+                       group = combination_number)) +
+  geom_line(alpha = 0.2) +
+  geom_hline(yintercept = 0.2, colour = 'darkgreen') +
+  labs(y = 'relative outer variance sheep',
+       title = 'sheep') +
+  facet_grid(~ tick) +
+  theme(axis.title.x = NULL)
+
+p2_sheep <- omega_conv_sheep %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(omega_conv_sheep$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(omega_conv_sheep$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(omega_conv_sheep$run) + 1, y = 20,
+           colour = 'darkgreen', angle = 90) +
+  annotate(geom = 'text', label = 'median',
+           x = median(omega_conv_sheep$run) - 1.5, y = 20,
+           colour = 'darkblue', angle = 90) +
+  labs(y = 'count') +
+  theme(axis.title.x = NULL)
+
+# plot for wolves
+p1_wolves <- numruns %>%
+  ggplot(mapping = aes(x = run, y = relative_outer_var_wolves,
+                       group = combination_number)) +
+  geom_line(alpha = 0.2) +
+  geom_hline(yintercept = 0.2, colour = 'darkgreen') +
+  labs(y = 'relative outer variance wolves',
+       title = 'wolves') +
+  facet_grid(~ tick)
+
+p2_wolves <- omega_conv_wolves %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(omega_conv_wolves$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(omega_conv_wolves$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(omega_conv_wolves$run) + 1, y = 10,
+           colour = 'darkgreen', angle = 90) +
+  annotate(geom = 'text', label = 'median',
+           x = median(omega_conv_wolves$run) + 1, y = 10,
+           colour = 'darkblue', angle = 90) +
+  labs(y = 'count',
+       x = 'number of runs until relative outer variance convergence')
+
+# plot for grass
+p1_grass <- numruns %>%
+  ggplot(mapping = aes(x = run, y = relative_outer_var_grass,
+                       group = combination_number)) +
+  geom_line(alpha = 0.2) +
+  geom_hline(yintercept = 0.2, colour = 'darkgreen') +
+  labs(y = 'relative outer variance grass',
+       title = 'grass') +
+  facet_grid(~ tick) +
+  theme(axis.title.x = NULL)
+
+p2_grass <- omega_conv_grass %>%
+  ggplot(mapping = aes(x = run)) +
+  geom_histogram(binwidth = 1) +
+  geom_vline(xintercept = mean(omega_conv_grass$run),
+             colour = 'darkgreen', lty = 2) +
+  geom_vline(xintercept = median(omega_conv_grass$run),
+             colour = 'darkblue', lty = 2) +
+  annotate(geom = 'text', label = 'mean',
+           x = mean(omega_conv_grass$run) + 1, y = 6,
+           colour = 'darkgreen', angle = 90) +
+  annotate(geom = 'text', label = 'median',
+           x = median(omega_conv_grass$run) - 1, y = 6,
+           colour = 'darkblue', angle = 90) +
+  labs(y = 'count') +
+  theme(axis.title.x = NULL)
+
+# plot all together
+outer_var_conv_plot <- (p1_sheep + p1_wolves + p1_grass) /
+  (p2_sheep + p2_wolves + p2_grass) +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = '1') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, colour = 'lightgrey'))
+
+outer_var_conv_plot[[1]][[1]] <- outer_var_conv_plot[[1]][[1]] +
+  theme(axis.title.x = element_blank())
+outer_var_conv_plot[[1]][[2]] <- outer_var_conv_plot[[1]][[2]] +
+  theme(axis.title.y = element_blank())
+outer_var_conv_plot[[1]][[3]] <- outer_var_conv_plot[[1]][[3]] +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+
+outer_var_conv_plot[[2]][[1]] <- outer_var_conv_plot[[2]][[1]] +
+  theme(axis.title.x = element_blank())
+outer_var_conv_plot[[2]][[2]] <- outer_var_conv_plot[[2]][[2]] +
+  theme(axis.title.y = element_blank())
+outer_var_conv_plot[[2]][[3]] <- outer_var_conv_plot[[2]][[3]] +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+```
+
+Inspect all:
+```{r}
+# mean convergence
+mean_conv_plot
+ggsave('figures/wolfsheep_mean_convergence.pdf',
+       height = 15, width = 20, units = 'cm')
+
+# coefficient of variation
+cv_conv_plot
+ggsave('figures/wolfsheep_coefficientofvariation.pdf',
+       height = 15, width = 20, units = 'cm')
+
+# windowed variance
+outer_var_conv_plot
+ggsave('figures/wolfsheep_windowed_variance.pdf',
+       height = 15, width = 20, units = 'cm')
+```
+Mean convergence means and medians all under 15.
+Coefficient of variation means and medians all under 5.
+Outer relative variance means and medians all under 15.
+
+I think I can safely go for 10.
+
+# Sampling parameter space
+Sample 1250, 5000, and 10000 samples using first random sampling and then Latin Hypercube Sampling.
+There are 7 parameters in this model. The parameter ranges are
+- initial-number-sheep 0 - 250
+- initial-number-wolves 0 - 250
+- grass-regrowth-time 0 - 100
+- sheep-gain-from-food 0 - 50
+- wolf-grain-from-food 0 - 100
+- sheep-reproduce 1 - 20
+- wolf-reproduce 0 - 20.
+There are 251 * 251 * 101 * 51 * 101 * 20 * 21 = 1.376606e+13 parameter combinations.
+
+I'm going to use 1250, 5000, and 10000 parameter combinations. That constitutes 9.080303e-09, 3.632121e-08, and 7.264243e-08 % of the parameter space, respectively.
+
+Random samples:
+```{r}
+set.seed(134)
+
+random_sample_ws <- function(size = 1250){
+  rand_sample <- tibble(initial_number_sheep = numeric(size),
+                        initial_number_wolves = numeric(size),
+                        grass_regrowth_time = numeric(size),
+                        sheep_gain_from_food = numeric(size),
+                        wolf_gain_from_food = numeric(size),
+                        sheep_reproduce = numeric(size),
+                        wolf_reproduce = numeric(size))
+  
+  rand_sample$initial_number_sheep <- sample(0:250,
+                                             size = size,
+                                             replace = TRUE)
+  rand_sample$initial_number_wolves <- sample(0:250,
+                                              size = size,
+                                              replace = TRUE)
+  rand_sample$grass_regrowth_time <- sample(0:100,
+                                            size = size,
+                                            replace = TRUE)
+  rand_sample$sheep_gain_from_food <- sample(0:50,
+                                             size = size,
+                                             replace = TRUE)
+  rand_sample$wolf_gain_from_food <- sample(0:100,
+                                            size = size,
+                                            replace = TRUE)
+  rand_sample$sheep_reproduce <- sample(1:20,
+                                        size = size,
+                                        replace = TRUE)
+  rand_sample$wolf_reproduce <- sample(0:20,
+                                       size = size,
+                                       replace = TRUE)
+  
+  rand_sample <- rand_sample %>%
+    mutate(technique = 'random',
+           sample_size = size) %>%
+    distinct()
+  
+  return(rand_sample)
+}
+
+# 1250 random samples
+rand_sample_1250 <- random_sample_ws(size = 1250)
+# check that they are all unique
+rand_sample_1250 %>%
+  distinct() %>%
+  summarise(n())
+
+# add 3750 cases to make up the 5000 sample
+rand_sample_5000 <- random_sample_ws(size = 3750)
+rand_sample_5000 <- rbind(rand_sample_5000,
+                          rand_sample_1250)
+rand_sample_5000 <- rand_sample_5000 %>%
+  mutate(sample_size = 5000)
+# check that they are all unique
+rand_sample_5000 %>%
+  distinct() %>%
+  summarise(n())
+
+# add 5000 cases to make up the 10000 sample
+rand_sample_10000 <- random_sample_ws(size = 5000)
+rand_sample_10000 <- rbind(rand_sample_10000,
+                          rand_sample_5000)
+rand_sample_10000 <- rand_sample_10000 %>%
+  mutate(sample_size = 10000)
+# check that they are all unique
+rand_sample_10000 %>%
+  distinct() %>%
+  summarise(n())
+```
+
+Latin Hypercube sampling:
+```{r}
+lhs_sample_ws <- function(size = 1250){
+  # n: number of samples to draw
+  # k: number of variables over which to sample
+  
+  # LHS with n samples over k variables
+  A <- randomLHS(n = size, k = 7)
+  
+  # transform samples to represent the parameter space
+  # create empty matrix to hold parameter space samples
+  B <- matrix(nrow = nrow(A), ncol = ncol(A))
+  # round uniform distribution between 0 and 25 for
+  # initial number of sheep and wolves
+  B[,1] <- round(qunif(A[,1], min = 0, max = 250), digits = 0)
+  B[,2] <- round(qunif(A[,2], min = 0, max = 250), digits = 0)
+  # round uniform distribution between 0 and 50 for sheep gain from food
+  B[,3] <- round(qunif(A[,3], min = 0, max = 50), digits = 0)
+  # round uniform distribution between 0 and 100 for wolf gain from food
+  B[,4] <- round(qunif(A[,4], min = 0, max = 100), digits = 0)
+  # round uniform distribution between 1 and 20 for 
+  # sheep reproduction probability and wolf reproduction probability
+  B[,5] <- round(qunif(A[,5], min = 1, max = 20), digits = 0)
+  B[,6] <- round(qunif(A[,6], min = 0, max = 20), digits = 0)
+  # round uniform distribution between 0 and 100 for grass regrowth time
+  B[,7] <- round(qunif(A[,7], min = 0, max = 100), digits = 0)
+
+  # set column names
+  colnames(B) <- c('initial_number_sheep', 'initial_number_wolves',
+                        'sheep_gain_from_food', 'wolf_gain_from_food',
+                        'sheep_reproduce', 'wolf_reproduce',
+                        'grass_regrowth_time')
+  
+  B <- as_tibble(B) %>%
+    mutate(technique = 'LHS',
+           sample_size = size)
+  
+  return(B)
+}
+
+lhs_sample_1250 <- lhs_sample_ws(size = 1250)
+lhs_sample_5000 <- lhs_sample_ws(size = 5000)
+lhs_sample_10000 <- lhs_sample_ws(size = 10000)
+```
+
+Compile into 1 table and save to import in Python
+```{r}
+parameter_space_samples <- bind_rows(rand_sample_1250,
+                                     rand_sample_5000,
+                                     rand_sample_10000,
+                                     lhs_sample_1250,
+                                     lhs_sample_5000,
+                                     lhs_sample_10000)
+
+write_csv(as.data.frame(parameter_space_samples),
+          'data/processed/wolfsheep_parameter_sample.csv')
+```
+
+For now, run this:
+```{r}
+parameter_space_samples %>%
+  filter(sample_size == 1250,
+         technique == 'random') %>%
+  write_csv('data/processed/wolfsheep_parameter_sample_1.csv')
+```
+
+Run each parameter combination 15 times.
+```{python}
+all_comb = pd.read_csv('C:\\Users\\Femke Keij\\OneDrive\\Thesis\\R projects\\LU thesis GitHub\\data\\processed\\wolfsheep_parameter_sample_1.csv')
+
+parameter_space_df = pd.DataFrame(columns = ['technique', 'sample_size', 'run', 'tick' ,'initial_number_sheep', 'initial_number_wolves', 'sheep_gain_from_food', 'wolf_gain_from_food', 'sheep_reproduce', 'wolf_reproduce', 'grass_regrowth', 'sheep', 'wolves', 'grass'])
+
+# RUNNING IN GROUPS OF 10
+all_comb = all_comb.iloc[321:341, 0:9]
+all_comb = all_comb.reset_index()
+# next: 281:301
+# next: 301:321
+# next: 321:341
+# next: 341:361
+
+# set random seed
+#netlogo.command('clean')
+
+# for each combination of parameters
+for i in range(0, len(all_comb)):
+  # retrieve parameters for run
+  initial_number_sheep = str(all_comb['initial_number_sheep'][i])
+  initial_number_wolves = str(all_comb['initial_number_wolves'][i])
+  sheep_gain_from_food = str(all_comb['sheep_gain_from_food'][i])
+  wolf_gain_from_food = str(all_comb['wolf_gain_from_food'][i])
+  sheep_reproduce = str(all_comb['sheep_reproduce'][i])
+  wolf_reproduce = str(all_comb['wolf_reproduce'][i])
+  grass_regrowth = str(all_comb['grass_regrowth_time'][i])
+  # retrieve extra info
+  technique = str(all_comb['technique'][i])
+  sample_size = str(all_comb['sample_size'][i])
+  
+  # set parameters
+  netlogo.command(''.join(['set initial-number-sheep ', initial_number_sheep]))
+  netlogo.command(''.join(['set initial-number-wolves ', initial_number_wolves]))
+  netlogo.command(''.join(['set sheep-gain-from-food ', sheep_gain_from_food]))
+  netlogo.command(''.join(['set wolf-gain-from-food ', wolf_gain_from_food]))
+  netlogo.command(''.join(['set sheep-reproduce ', sheep_reproduce]))
+  netlogo.command(''.join(['set wolf-reproduce ', wolf_reproduce]))
+  netlogo.command(''.join(['set grass-regrowth-time ', grass_regrowth]))
+  
+  # run combination 10 times
+  for j in range(1, 16):
+    # set up
+    netlogo.command('setup')
+    # execute 1 tick at a time, and report
+    for h in range(0, 500):
+      netlogo.command('go')
+      # record number of sheep, wolves, grass, and ticks
+      sheep = netlogo.report('count sheep')
+      wolves = netlogo.report('count wolves')
+      grass = netlogo.report('count grass')
+      ticks = netlogo.report('ticks')
+      # add to data frame
+      parameter_space_df = parameter_space_df.append({'technique': technique, 'sample_size': sample_size, 'run': j, 'tick': ticks, 'initial_number_sheep': initial_number_sheep, 'initial_number_wolves': initial_number_wolves, 'sheep_gain_from_food': sheep_gain_from_food, 'wolf_gain_from_food': wolf_gain_from_food, 'sheep_reproduce': sheep_reproduce, 'wolf_reproduce': wolf_reproduce, 'grass_regrowth': grass_regrowth, 'sheep': sheep, 'wolves': wolves, 'grass': grass}, ignore_index = True)
+      # break out of this level if the maximum number of sheep is reached and there are no wolves or grass left
+      if wolves == 0 and grass == 0 and sheep > 30000:
+        break
+      
+  print(''.join(['finished run ', str(i), '\n']), flush = True)
+
+# WHEN RUNNING IN GROUPS, CHANGE SAVE NUMBER
+# save data as csv file
+parameter_space_df.to_csv('C:\\Users\\Femke Keij\\OneDrive\\Thesis\\R projects\\LU thesis GitHub\\data\\raw\\wolfsheep_output18.csv')
+```
+
+Close the model:
+```{python}
+netlogo.kill_workspace()
+```
+
+Stop running the python environment:
+```{python}
+quit
+```
+
+# Summarise repeated runs
+Clear working directory:
+```{r}
+rm(list = ls(all = TRUE))
+```
+
+Import csv output format for the model as tidy data. We ignore the first column because it contains the indices.
+This is a limited sample data set with around 300 cases that will be used for now.
+```{r}
+ws_output <- read_csv("data/raw/wolfsheep_output200.csv",
+                        col_names = TRUE)[, - 1]
+```
+
+Look at the distribution of the outputs within 1 parameter combination. If this is approximately normal (or concentrated around a single mean), we can summarise the data into a single value (the mean).
+```{r}
+ws_output <- ws_output %>%
+  group_by(initial_number_sheep, initial_number_wolves,
+           sheep_gain_from_food, wolf_gain_from_food,
+           sheep_reproduce, wolf_reproduce,
+           grass_regrowth) %>%
+  mutate(combination_number = cur_group_id()) %>%
+  filter(combination_number <= 200)
+
+# plot a histogram of all the standard deviations for the sheep output
+sd_plot_sheep <- ws_output %>%
+  filter(tick %in% c(50, 250, 450)) %>%
+  group_by(combination_number, tick) %>%
+  mutate(sd = sd(sheep)) %>%
+  select(combination_number, sd, tick) %>%
+  distinct() %>%
+  drop_na() %>%
+  ggplot(mapping = aes(x = sd)) +
+  geom_histogram(binwidth = 100) +
+  facet_grid(~ tick) +
+  theme_minimal() +
+  theme(panel.border = element_rect(fill = NA,
+                                    colour = 'lightgrey'),
+        panel.grid.minor = element_blank()) +
+  labs(x = 'sd of number of sheep per parameter combination')
+
+sd_plot_wolves <- ws_output %>%
+  filter(tick %in% c(50, 250, 450)) %>%
+  group_by(combination_number, tick) %>%
+  mutate(sd = sd(wolves)) %>%
+  select(combination_number, sd, tick) %>%
+  distinct() %>%
+  drop_na() %>%
+  ggplot(mapping = aes(x = sd)) +
+  geom_histogram(binwidth = 100) +
+  facet_grid(~ tick) +
+  theme_minimal() +
+  theme(panel.border = element_rect(fill = NA,
+                                    colour = 'lightgrey'),
+        panel.grid.minor = element_blank()) +
+  labs(x = 'sd of number of wolves per parameter combination')
+
+sd_plot_grass <- ws_output %>%
+  filter(tick %in% c(50, 250, 450)) %>%
+  group_by(combination_number, tick) %>%
+  mutate(sd = sd(grass)) %>%
+  select(combination_number, sd, tick) %>%
+  distinct() %>%
+  drop_na() %>%
+  ggplot(mapping = aes(x = sd)) +
+  geom_histogram(binwidth = 100) +
+  facet_grid(~ tick) +
+  theme_minimal() +
+  theme(panel.border = element_rect(fill = NA,
+                                    colour = 'lightgrey'),
+        panel.grid.minor = element_blank()) +
+  labs(x = 'sd of amount of gras per parameter combination')
+
+# inspect the parameter combinations that yield large standard deviations
+large_sd <- ws_output %>%
+  filter(tick %in% c(50, 250, 450)) %>%
+  group_by(combination_number, tick) %>%
+  mutate(sd_sheep = sd(sheep),
+         sd_wolves = sd(wolves),
+         sd_grass = sd(grass),
+         mean_sheep = mean(sheep),
+         mean_wolves = mean(wolves),
+         mean_grass = mean(grass)) %>%
+  select(- c(run, technique, sample_size)) %>%
+  distinct() %>%
+  ungroup()
+
+# show the distributions for the parameter combinations with the 5
+# largest standard deviations
+large_sd_sheep <- large_sd %>%
+  select(- c(sheep, wolves, grass)) %>%
+  distinct() %>%
+  arrange(- sd_sheep) %>%
+  mutate(rank_sd = row_number()) %>%
+  filter(rank_sd <= 5) %>%
+  select(combination_number)
+large_sd_wolves <- large_sd %>%
+  select(- c(sheep, wolves, grass)) %>%
+  distinct() %>%
+  arrange(- sd_wolves) %>%
+  mutate(rank_sd = row_number()) %>%
+  filter(rank_sd <= 5) %>%
+  select(combination_number)
+large_sd_grass <- large_sd %>%
+  select(- c(sheep, wolves, grass)) %>%
+  distinct() %>%
+  arrange(- sd_grass) %>%
+  mutate(rank_sd = row_number()) %>%
+  filter(rank_sd <= 5) %>%
+  select(combination_number)
+
+individual_plot_sheep <- large_sd %>%
+  filter(combination_number %in%
+           unlist(large_sd_sheep)) %>%
+  ggplot(mapping = aes(x = sheep)) +
+  geom_histogram(binwidth = 100) +
+  geom_vline(aes(xintercept = mean_sheep,
+                 group = combination_number),
+             colour = 'red') +
+  facet_grid(combination_number ~ tick,
+             scales = 'free') +
+  labs(x = 'amount of sheep')
+
+individual_plot_wolves <- large_sd %>%
+  filter(combination_number %in%
+           unlist(large_sd_wolves)) %>%
+  ggplot(mapping = aes(x = wolves)) +
+  geom_histogram(binwidth = 100) +
+  geom_vline(aes(xintercept = mean_wolves,
+                 group = combination_number),
+             colour = 'red') +
+  facet_grid(combination_number ~ tick,
+             scales = 'free') +
+  labs(x = 'amount of wolves')
+
+individual_plot_grass <- large_sd %>%
+  filter(combination_number %in%
+           unlist(large_sd_grass)) %>%
+  ggplot(mapping = aes(x = grass)) +
+  geom_histogram(binwidth = 100) +
+  geom_vline(aes(xintercept = mean_grass,
+                 group = combination_number),
+             colour = 'red') +
+  facet_grid(combination_number ~ tick,
+             scales = 'free') +
+  labs(x = 'amount of grass')
+
+# combined plot for sheep
+sd_plot_sheep / individual_plot_sheep +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = 'A') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, colour = 'lightgrey'))
+
+ggsave('figures/wolfsheep_summarising_sheep.pdf',
+       height = 30, width = 20, units = 'cm')
+
+# combined plot for wolves
+sd_plot_wolves / individual_plot_wolves +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = 'A') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, colour = 'lightgrey'))
+
+ggsave('figures/wolfsheep_summarising_wolves.pdf',
+       height = 30, width = 20, units = 'cm')
+
+# combined plot for grass
+sd_plot_grass / individual_plot_grass +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = 'A') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, colour = 'lightgrey'))
+
+ggsave('figures/wolfsheep_summarising_grass.pdf',
+       height = 30, width = 20, units = 'cm')
+```
+
+Manipulate data so that there is 1 outcome for each parameter combination:
+The outcomes for each parameter set are summarized by their mean sheep, wolves, and grass at every tick of the simulation.
+```{r}
+# group the data by parameter combination and ticks
+ws_summary <- ws_output %>%
+  group_by(combination_number, tick) %>%
+  mutate(mean_sheep = mean(sheep),
+         mean_wolves = mean(wolves),
+         mean_grass = mean(grass)) %>%
+  mutate(sample_size = 200) %>%
+  select(- c(run, sheep, wolves, grass)) %>%
+  distinct() %>%
+  rename(wolves_reproduce = wolf_reproduce,
+         wolves_gain_from_food = wolf_gain_from_food,
+         ticks = tick,
+         sheep = mean_sheep,
+         wolves = mean_wolves,
+         grass = mean_grass)
+
+ws_summary %>%
+  write_csv(file = 'data/processed/wolfsheep_summary200.csv')
+```
+
+Also save non-summarised version:
+```{r}
+ws_output %>%
+  mutate(sample_size = 200) %>%
+  rename(wolves_reproduce = wolf_reproduce,
+         wolves_gain_from_food = wolf_gain_from_food,
+         ticks = tick) %>%
+  write_csv(file = 'data/processed/wolfsheep_full200.csv')
+```

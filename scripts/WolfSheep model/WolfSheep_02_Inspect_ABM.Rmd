@@ -1,0 +1,622 @@
+---
+title: "WolfSheep_01_Explore_Model"
+author: "Femke Keij S2647168"
+date: "2023-03-15"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Clear working directory:
+```{r}
+rm(list = ls(all = TRUE)) 
+```
+
+Packages used:
+```{r}
+# for importing / working with tidy data
+library(tidyverse)
+
+# for arranging ggplots
+library(patchwork)
+
+# for ggplot aesthetics
+library(directlabels)
+library(RColorBrewer)
+
+# ridgeline plots
+library(ggridges)
+
+# for k-means clustering
+library(factoextra)
+
+# for hierarchical dynamic time warping clustering
+library(dtwclust)
+
+# for computing trends in data
+library(trend)
+```
+
+Random seed:
+```{r}
+set.seed(42)
+```
+
+Read in the data:
+```{r}
+# complete data set
+ws_output <- read_csv(
+  'data/processed/wolfsheep_full200.csv')
+
+# output data summary
+ws_summary <- read_csv(
+  'data/processed/wolfsheep_summary200.csv')
+```
+
+# Visualising parameter space
+Time series. Because showing all at the same time is a mess, I'm showing a couple different scenarios instead.
+```{r}
+PlotTimeSeriesWS <- function(select){
+  plot <- ws_summary %>%
+    pivot_longer(cols = c(sheep, wolves, grass),
+                 names_to = 'agent',
+                 values_to = 'value') %>%
+    filter(combination_number == select) %>%
+    ggplot(mapping = aes(x = ticks,
+                         y = value,
+                         colour = agent)) +
+    geom_path() +
+    scale_color_manual(values=c('springgreen4', 'gold1', 'maroon')) +
+    labs(y = 'log(population)')
+  
+  return(plot)
+}
+
+# wolves and sheep go extinct, grass at carrying capacity
+plot1 <- PlotTimeSeriesWS(select = 100)
+# wolves go extinct, sheep & grass cycle
+plot2 <- PlotTimeSeriesWS(select = 1)
+# cyclical behaviours between all 3
+plot3 <- PlotTimeSeriesWS(select = 30)
+
+plot1 / plot2 / plot3 +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = 'A') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank()) &
+  labs(colour = element_blank())
+
+ggsave('figures/wolfsheep_parameterspace_timeseries.pdf',
+       height = 30, width = 20, units = 'cm')
+```
+
+Plot distributions of outcomes.
+Categorize the input parameters to make visualisation easier:
+```{r}
+ws_summary_cat <- ws_summary %>%
+  mutate(sheep_cat = cut(initial_number_sheep,
+                         breaks = c(-Inf, 50, 100, 150, 200, Inf),
+                         labels = c('0 - 50', '51 - 100', '101 - 150',
+                                    '151 - 200', '201 - 250')),
+         wolves_cat = cut(initial_number_wolves,
+                          breaks = c(-Inf, 50, 100, 150, 200, Inf),
+                          labels = c('0 - 50', '51 - 100', '101 - 150',
+                                    '151 - 200', '201 - 250')),
+         sheep_food_cat = cut(sheep_gain_from_food,
+                         breaks = c(-Inf, 25, Inf),
+                         labels = c('0 - 25', '26 - 50')),
+         wolves_food_cat = cut(wolves_gain_from_food,
+                         breaks = c(-Inf, 25, 50, 75, Inf),
+                         labels = c('0 - 25', '26 - 50', '51 - 75', '76 - 100')),
+         sheep_rep_cat = cut(sheep_reproduce,
+                         breaks = c(-Inf, 10, Inf),
+                         labels = c('0 - 10', '11 - 20')),
+         wolves_rep_cat = cut(wolves_reproduce,
+                         breaks = c(-Inf, 10, Inf),
+                         labels = c('1 - 10', '11 - 20')),
+         grass_cat = cut(grass_regrowth,
+                         breaks = c(-Inf, 25, 50, 75, Inf),
+                         labels = c('0 - 25', '26 - 50', '51 - 75', '76 - 100')))
+```
+
+Violin plots of the distribution of sheep, wolves, and grass at timesteps 50, 250, and 450, categorized per value of initial parameters.
+```{r}
+ViolinPlotWS <- function(parameter, x_lab){
+  plot <- ws_summary_cat %>%
+    pivot_longer(cols = c(sheep, wolves, grass),
+                 names_to = 'agents',
+                 values_to = 'value') %>%
+    filter(ticks %in% c(50, 250, 450)) %>%
+    ggplot(mapping = aes(x = get(parameter), y = value)) +
+    geom_violin() +
+    facet_grid(agents ~ ticks,
+               scales = 'free') +
+    theme_minimal() +
+    theme(panel.border = element_rect(fill = NA,
+                                           colour = 'lightgrey')) +
+    labs(x = x_lab,
+         y = 'population')
+}
+
+sheep_cat_plot <- ViolinPlotWS(parameter = 'sheep_cat',
+             x_lab = 'initial number of sheep')
+ggsave('figures/wolfsheep_parameterspace_sheepcat.pdf',
+       plot = sheep_cat_plot,
+       height = 15, width = 20, units = 'cm')
+
+wolves_cat_plot <- ViolinPlotWS(parameter = 'wolves_cat',
+                               x_lab = 'initial number of wolves')
+ggsave('figures/wolfsheep_parameterspace_wolvescat.pdf',
+       plot = wolves_cat_plot,
+       height = 15, width = 20, units = 'cm')
+
+sheep_food_cat_plot <- ViolinPlotWS(parameter = 'sheep_food_cat',
+                               x_lab = 'sheep gain from food')
+ggsave('figures/wolfsheep_parameterspace_sheepfoodcat.pdf',
+       plot = sheep_food_cat_plot,
+       height = 15, width = 20, units = 'cm')
+
+wolves_food_cat_plot <- ViolinPlotWS(parameter = 'wolves_food_cat',
+                               x_lab = 'wolves gain from food')
+ggsave('figures/wolfsheep_parameterspace_wolvesfoodcat.pdf',
+       plot = wolves_food_cat_plot,
+       height = 15, width = 20, units = 'cm')
+
+sheep_rep_cat_plot <- ViolinPlotWS(parameter = 'sheep_rep_cat',
+                               x_lab = 'sheep reproduction probability')
+ggsave('figures/wolfsheep_parameterspace_sheeprepcat.pdf',
+       plot = sheep_rep_cat_plot,
+       height = 15, width = 20, units = 'cm')
+
+wolves_rep_cat_plot <- ViolinPlotWS(parameter = 'wolves_rep_cat',
+                               x_lab = 'wolf reproduction probability')
+ggsave('figures/wolfsheep_parameterspace_wolvesrepcat.pdf',
+       plot = wolves_rep_cat_plot,
+       height = 15, width = 20, units = 'cm')
+
+grass_cat_plot <- ViolinPlotWS(parameter = 'grass_cat',
+                               x_lab = 'grass regrowth time')
+ggsave('figures/wolfsheep_parameterspace_grasscat.pdf',
+       plot = grass_cat_plot,
+       height = 15, width = 20, units = 'cm')
+```
+
+# Identifying equifinality
+Apply a k-means clustering to the sheep, grass, and wolf values at timesteps 50, 100, 250, 450, and 500. Then take a look at which parameter combinations end up in the same cluster.
+Start by formatting the data for the analysis
+```{r}
+# retrieve sheep, grass, and wolves at timesteps 50, 100, 250, 450, and 500 for every parameter combination
+kmeans_data <- ws_summary %>%
+  filter(ticks %in% c(50, 100, 250, 450, 500)) %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(sheep, wolves, grass)) %>%
+  # the NAs can all be replaced by 0, they result from the simulation
+  # stopping early if there are no agents left
+  replace(is.na(.), 0) %>%
+  select(sheep_50, sheep_100, sheep_250, sheep_450, sheep_500,
+         wolves_50, wolves_100, wolves_250, wolves_450, wolves_500,
+         grass_50, grass_100, grass_250, grass_450, grass_500)
+
+# standardize data
+kmeans_data <- scale(kmeans_data)
+```
+
+Determine optimal number of clusters:
+- elbow method: we want to minimize the total within-cluster variation (or within-cluster sum of squares). we compute the wss for a number of different clusters, and then choose the number of clusters where we see the 'elbow' occur
+- average silhouette method: this approach inspects how well each observation fits within its cluster. If the average is high, that indicates good clustering.
+```{r}
+# elbow method
+fviz_nbclust(kmeans_data, kmeans, method = "wss")
+
+# silhouette method
+fviz_nbclust(kmeans_data, kmeans, method = "silhouette")
+```
+
+I'll be using 5 centers:
+```{r}
+clustering <- kmeans(kmeans_data, centers = 5, nstart = 25)
+
+fviz_cluster(clustering, data = kmeans_data)
+```
+
+Now I can inspect which parameter combinations ended up in the same cluster.
+```{r}
+clustered_parameters <- ws_summary %>%
+  select(combination_number,
+         initial_number_sheep, initial_number_wolves,
+         wolves_gain_from_food, wolves_reproduce,
+         sheep_gain_from_food, sheep_reproduce,
+         grass_regrowth) %>%
+  distinct() %>%
+  add_column(cluster = clustering$cluster)
+
+# visualise results
+plot_initial_sheep <- clustered_parameters %>%
+  ggplot(mapping = aes(x = as.factor(cluster),
+                       y = initial_number_sheep)) +
+  geom_jitter(width = 0.2) +
+  geom_boxplot(alpha = 0.1, width = 0.4,
+               outlier.colour = 'transparent') +
+  labs(y = 'initial number of sheep') +
+  theme(legend.position = 'none')
+
+plot_initial_wolves <- clustered_parameters %>%
+  ggplot(mapping = aes(x = as.factor(cluster),
+                       y = initial_number_wolves)) +
+  geom_jitter(width = 0.2) +
+  geom_boxplot(alpha = 0.1, width = 0.4,
+               outlier.colour = 'transparent') +
+  labs(y = 'initial number of wolves') +
+  theme(legend.position = 'none')
+
+plot_sheep_food <- clustered_parameters %>%
+  ggplot(mapping = aes(x = as.factor(cluster),
+                       y = sheep_gain_from_food)) +
+  geom_jitter(width = 0.2) +
+  geom_boxplot(alpha = 0.1, width = 0.4,
+               outlier.colour = 'transparent') +
+  labs(y = 'sheep gain from food') +
+  theme(legend.position = 'none')
+
+plot_wolves_food <- clustered_parameters %>%
+  ggplot(mapping = aes(x = as.factor(cluster),
+                       y = wolves_gain_from_food)) +
+  geom_jitter(width = 0.2) +
+  geom_boxplot(alpha = 0.1, width = 0.4,
+               outlier.colour = 'transparent') +
+  labs(y = 'wolves gain from food') +
+  theme(legend.position = 'none')
+
+plot_sheep_rep <- clustered_parameters %>%
+  ggplot(mapping = aes(x = as.factor(cluster),
+                       y = sheep_reproduce)) +
+  geom_jitter(width = 0.2) +
+  geom_boxplot(alpha = 0.1, width = 0.4,
+               outlier.colour = 'transparent') +
+  labs(y = 'sheep reproduction \n probability') +
+  theme(legend.position = 'none')
+
+plot_wolves_rep <- clustered_parameters %>%
+  ggplot(mapping = aes(x = as.factor(cluster),
+                       y = wolves_reproduce)) +
+  geom_jitter(width = 0.2) +
+  geom_boxplot(alpha = 0.1, width = 0.4,
+               outlier.colour = 'transparent') +
+  labs(y = 'wolves reproduction \n probability')
+
+plot_grass <- clustered_parameters %>%
+  ggplot(mapping = aes(x = as.factor(cluster),
+                       y = grass_regrowth)) +
+  geom_jitter(width = 0.2) +
+  geom_boxplot(alpha = 0.1, width = 0.4,
+               outlier.colour = 'transparent') +
+  labs(y = 'grass regrowth time')
+
+(plot_initial_sheep + plot_initial_wolves) /
+  (plot_sheep_food + plot_wolves_food) /
+  (plot_sheep_rep + plot_wolves_rep) / plot_grass +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = 'A') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA,
+                                    colour = 'lightgrey')) &
+  labs(x = '5-means clusters')
+
+ggsave('figures/wolfsheep_equifinality_kmeans.pdf',
+       height = 30, width = 20, units = 'cm')
+```
+Looking at this it seems like the initial parameter can tell us very little about what the outcome will be like. So a lot of equifinality.
+
+Hierarchical dynamic time warping clustering
+```{r}
+# create data with all time points, standardize
+hierarchical_data <- ws_summary %>%
+  select(combination_number,
+         mean_sheep, mean_wolves, mean_grass, ticks) %>%
+  pivot_wider(names_from = ticks,
+              values_from = c(mean_sheep, mean_wolves, mean_grass)) %>%
+  select(- combination_number) %>%
+  scale()
+
+# change to list format to allow for different lengths of time series
+#   as input for the hierarchical clustering DTW algorithm
+hierarchical_data_list <- list()
+
+for(i in 1:nrow(hierarchical_data)){
+  # keep only ticks with values
+  throw <- which(is.na(hierarchical_data[i, ]))
+  keep <- hierarchical_data[i, - throw]
+  hierarchical_data_list <- append(hierarchical_data_list, keep)
+}
+
+# train hierarchical clustering with DTW
+hierarchical_clust <- tsclust(hierarchical_data_list,
+                              type = 'h',
+                              k = 5L,
+                              distance = 'dtw')
+
+# plot results
+plot(hierarchical_clust, type = 'sc')
+
+# plot rest of results (haven't tried running this yet)
+hierarchical_clustered_parameters <- ws_summary %>%
+  select(- c(mean_sheep, mean_wolves, mean_grass, ticks)) %>%
+  distinct() %>%
+  mutate(cluter = cutree(hierarchical_clust, k = 6L))
+  
+hierarchical_plots <- PlotClusters(hierarchical_clustered_parameters,
+                             c('initial_number_sheep',
+                               'initial_number_wolves',
+                               'sheep_gain_from_food',
+                               'wolves_gain_from_food',
+                               'sheep_reproduce',
+                               'wolves_reproduce',
+                               'grass_regrowth'),
+                             c('initial number of sheep',
+                               'initial number of wolves',
+                               'sheep gain from food',
+                               'wolves gain from food',
+                               'probability sheep reproduce',
+                               'probability wolves reproduce',
+                               'grass regrowth time'))
+```
+
+# Finding unidentifiable parameters
+Correlation between parameters and outputs:
+```{r}
+plot_sheep <- ws_summary %>%
+  filter(ticks %in% c(50, 250, 450)) %>%
+  # scale input parameters so that they all range from 0 to 100
+  mutate(initial_number_sheep = initial_number_sheep / 250 * 100,
+         initial_number_wolves = initial_number_wolves / 250 * 100,
+         sheep_gain_from_food = sheep_gain_from_food / 50 * 100,
+         sheep_reproduce = sheep_reproduce / 20 * 100,
+         wolves_reproduce = wolves_reproduce / 50 * 100) %>%
+  pivot_longer(cols = c(initial_number_sheep,
+                       initial_number_wolves,
+                       sheep_gain_from_food,
+                       wolves_gain_from_food,
+                       sheep_reproduce,
+                       wolves_reproduce,
+                       grass_regrowth),
+              names_to = 'input_parameters',
+              values_to = 'values') %>%
+  ggplot(mapping = aes(x = values, y = log(sheep),
+                       group = input_parameters,
+                       colour = input_parameters)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = 'loess', se = FALSE,
+              lwd = 0.5) +
+  scale_color_brewer(palette = 'Set2',
+                     labels = c('grass regrowth time',
+                                'initial number of sheep',
+                                'initial number of wolves',
+                                'sheep gain from food',
+                                'sheep reproduce',
+                                'wolves gain from food',
+                                'wolves reproduce')) +
+  labs(y = 'log(sheep population)') +
+  facet_grid(~ ticks)
+
+plot_wolves <- ws_summary %>%
+  filter(ticks %in% c(50, 250, 450)) %>%
+  # scale input parameters so that they all range from 0 to 100
+  mutate(initial_number_sheep = initial_number_sheep / 250 * 100,
+         initial_number_wolves = initial_number_wolves / 250 * 100,
+         sheep_gain_from_food = sheep_gain_from_food / 50 * 100,
+         sheep_reproduce = sheep_reproduce / 20 * 100,
+         wolves_reproduce = wolves_reproduce / 50 * 100) %>%
+  pivot_longer(cols = c(initial_number_sheep,
+                       initial_number_wolves,
+                       sheep_gain_from_food,
+                       wolves_gain_from_food,
+                       sheep_reproduce,
+                       wolves_reproduce,
+                       grass_regrowth),
+              names_to = 'input_parameters',
+              values_to = 'values') %>%
+  ggplot(mapping = aes(x = values, y = log(wolves),
+                       group = input_parameters,
+                       colour = input_parameters)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = 'loess', se = FALSE,
+              lwd = 0.5) +
+  scale_color_brewer(palette = 'Set2',
+                     labels = c('grass regrowth time',
+                                'initial number of sheep',
+                                'initial number of wolves',
+                                'sheep gain from food',
+                                'sheep reproduce',
+                                'wolves gain from food',
+                                'wolves reproduce')) +
+  labs(y = 'log(wolf population)') +
+  facet_grid(~ ticks)
+
+plot_grass <- ws_summary %>%
+  filter(ticks %in% c(50, 250, 450)) %>%
+  # scale input parameters so that they all range from 0 to 100
+  mutate(initial_number_sheep = initial_number_sheep / 250 * 100,
+         initial_number_wolves = initial_number_wolves / 250 * 100,
+         sheep_gain_from_food = sheep_gain_from_food / 50 * 100,
+         sheep_reproduce = sheep_reproduce / 20 * 100,
+         wolves_reproduce = wolves_reproduce / 50 * 100) %>%
+  pivot_longer(cols = c(initial_number_sheep,
+                       initial_number_wolves,
+                       sheep_gain_from_food,
+                       wolves_gain_from_food,
+                       sheep_reproduce,
+                       wolves_reproduce,
+                       grass_regrowth),
+              names_to = 'input_parameters',
+              values_to = 'values') %>%
+  ggplot(mapping = aes(x = values, y = log(grass),
+                       group = input_parameters,
+                       colour = input_parameters)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = 'loess', se = FALSE,
+              lwd = 0.5) +
+  scale_color_brewer(palette = 'Set2',
+                     labels = c('grass regrowth time',
+                                'initial number of sheep',
+                                'initial number of wolves',
+                                'sheep gain from food',
+                                'sheep reproduce',
+                                'wolves gain from food',
+                                'wolves reproduce')) +
+  labs(y = 'log(grass population)') +
+  facet_grid(~ ticks)
+
+plot_sheep / plot_wolves / plot_grass +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = 'A') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA,
+                                    colour = 'lightgrey')) &
+  labs(x = 'input parameter values',
+       colour = 'input parameters')
+
+ggsave('figures/wolfsheep_identifiability.pdf',
+       height = 30, width = 20, units = 'cm')
+```
+
+It looks like all parameters are at least influential on one of the outputs, so they appear identifiable in that sense.
+
+However, we can also see that a lot of the relationships look the same, indicating that the parameters may be unidentifiable because they influence the output parameters in the same way.
+
+# Temporal autcorrelation plots
+Compute (partial) autocorrelation for each time series
+```{r}
+# dataframe to store results
+autocorrelation_df <- tibble(combination_number = numeric(),
+                              lag = numeric(),
+                              acf_sheep = numeric(),
+                              pacf_sheep = numeric(),
+                              acf_wolves = numeric(),
+                              pacf_wolves = numeric(),
+                              acf_grass = numeric(),
+                              pacf_grass = numeric())
+
+# per time series (parameter set)
+for(i in unique(ws_summary$combination_number)){
+  select <- ws_summary %>%
+    filter(combination_number == i)
+  
+  # compute acf and pacf
+  acfs_sheep <- acf(select$sheep, plot = FALSE,
+                    lag.max = 45, type = 'correlation')$acf
+  pacfs_sheep <- pacf(select$sheep, plot = FALSE,
+                      lag.max = 45)$acf
+  acfs_wolves <- acf(select$wolves, plot = FALSE,
+                     lag.max = 45, type = 'correlation')$acf
+  pacfs_wolves <- pacf(select$wolves, plot = FALSE,
+                       lag.max = 45)$acf
+  acfs_grass <- acf(select$grass, plot = FALSE,
+                    lag.max = 45, type = 'correlation')$acf
+  pacfs_grass <- pacf(select$grass, plot = FALSE,
+                     lag.max = 45)$acf
+  
+  # add 0 in front of the pacf series, since they start at lag 1, not 0
+  add_df <- tibble(combination_number = rep(i, 46),
+                   lag = 0:45,
+                   acf_sheep = acfs_sheep,
+                   pacf_sheep = c(0, pacfs_sheep),
+                   acf_wolves = acfs_wolves,
+                   pacf_wolves = c(0, pacfs_wolves),
+                   acf_grass = acfs_grass,
+                   pacf_grass = c(0, pacfs_grass))
+  
+  autocorrelation_df <- autocorrelation_df %>%
+    add_row(add_df)
+}
+```
+
+Plot (partial) autocorrelations:
+```{r}
+acf_sheep <- autocorrelation_df %>%
+  group_by(lag) %>%
+  mutate(mean_acf_sheep = mean(acf_sheep, na.rm = TRUE)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = lag)) +
+  geom_line(aes(y = acf_sheep, group = as.factor(combination_number)),
+            alpha = 0.1) +
+  geom_line(aes(y = mean_acf_sheep),
+            colour = 'gold1') +
+  labs(y = 'autocorrelation sheep')
+
+pacf_sheep <- autocorrelation_df %>%
+  group_by(lag) %>%
+  mutate(mean_pacf_sheep = mean(pacf_sheep, na.rm = TRUE)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = lag)) +
+  geom_line(aes(y = pacf_sheep, group = as.factor(combination_number)),
+            alpha = 0.1) +
+  geom_line(aes(y = mean_pacf_sheep),
+            colour = 'gold1') +
+  labs(y = 'partial autocorrelation \n sheep')
+
+acf_wolves <- autocorrelation_df %>%
+  group_by(lag) %>%
+  mutate(mean_acf_wolves = mean(acf_wolves, na.rm = TRUE)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = lag)) +
+  geom_line(aes(y = acf_wolves, group = as.factor(combination_number)),
+            alpha = 0.1) +
+  geom_line(aes(y = mean_acf_wolves),
+            colour = 'maroon') +
+  labs(y = 'autocorrelation wolves')
+
+pacf_wolves <- autocorrelation_df %>%
+  group_by(lag) %>%
+  mutate(mean_pacf_wolves = mean(pacf_wolves, na.rm = TRUE)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = lag)) +
+  geom_line(aes(y = pacf_wolves,
+                group = as.factor(combination_number)),
+            alpha = 0.1) +
+  geom_line(aes(y = mean_pacf_wolves),
+            colour = 'maroon') +
+  labs(y = 'partial autocorrelation \n wolves')
+
+acf_grass <- autocorrelation_df %>%
+  group_by(lag) %>%
+  mutate(mean_acf_grass = mean(acf_grass, na.rm = TRUE)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = lag)) +
+  geom_line(aes(y = acf_grass, group = as.factor(combination_number)),
+            alpha = 0.1) +
+  geom_line(aes(y = mean_acf_grass),
+            colour = 'springgreen4') +
+  labs(y = 'autocorrelation grass')
+
+pacf_grass <- autocorrelation_df %>%
+  group_by(lag) %>%
+  mutate(mean_pacf_grass = mean(pacf_grass, na.rm = TRUE)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = lag)) +
+  geom_line(aes(y = pacf_grass, group = as.factor(combination_number)),
+            alpha = 0.1) +
+  geom_line(aes(y = mean_pacf_grass),
+            colour = 'springgreen4') +
+  labs(y = 'partial autocorrelation \n grass')
+
+(acf_sheep + pacf_sheep) /
+    (acf_wolves + pacf_wolves) /
+    (acf_grass + pacf_grass) +
+  plot_layout(guides = 'collect') +
+  plot_annotation(tag_levels = 'A') &
+  theme_minimal() +
+  theme(plot.tag = element_text(size = 8),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA,
+                                    colour = 'lightgrey'))
+
+ggsave('figures/wolfsheep_autocorrelation.pdf',
+       height = 15, width = 20, units = 'cm')
+```

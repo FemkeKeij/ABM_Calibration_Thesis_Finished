@@ -1,0 +1,792 @@
+---
+title: "Fire_13_Comparison"
+author: "Femke Keij S2647168"
+date: "2023-03-29"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Preliminaries
+Clear working directory & set random seed:
+```{r}
+rm(list = ls(all = TRUE))
+
+set.seed(42)
+```
+
+Packages used:
+```{r}
+# for importing / working with tidy data
+library(tidyverse)
+
+# for ggplot
+library(directlabels)
+library(patchwork)
+library(ggbeeswarm)
+```
+
+Data:
+```{r}
+lr_errors <- read_csv('data/results/fire_lr_errors.csv')
+pls_errors <- read_csv('data/results/fire_pls_errors.csv')
+rf_errors <- read_csv('data/results/fire_rf_errors.csv')
+mrf_errors <- read_csv('data/results/fire_mrf_errors.csv')
+```
+
+Merge all data:
+```{r}
+errors <- bind_rows(lr_errors, pls_errors, rf_errors, mrf_errors)
+```
+
+```{r}
+# for directions, plot: perc_directions_correct, directions_kappa, directions_f1, directions_mcc
+metric_labs_directions <- c(
+  'perc_directions_correct' =
+    '% correctly estimated \n direction parameters',
+  'directions_kappa' = 'kappa score',
+  'directions_f1' = 'F1 score',
+  'directions_mcc' = 'MCC')
+
+errors_algorithms_directions <- errors %>%
+  select(c(algorithm, perc_directions_correct,
+           directions_kappa, directions_f1, directions_mcc)) %>%
+  mutate(algorithm = ifelse(algorithm == 'PLS',
+                              'Partial Least Squares',
+                              algorithm)) %>%
+  pivot_longer(cols = c('perc_directions_correct',
+                        'directions_kappa',
+                        'directions_f1',
+                        'directions_mcc'),
+               names_to = 'metric',
+               values_to = 'value') %>%
+  ggplot(mapping = aes(x = fct_relevel(algorithm,
+                                       'Linear Regression',
+                                       'Partial Least Squares',
+                                       'Random Forest',
+                                       'Multivariate Random Forest'),
+                       y = value)) +
+  geom_boxplot() +
+  facet_wrap(~ metric, scales = 'free_y',
+             labeller = labeller(metric = metric_labs_directions)) +
+  labs(x = NULL,
+       y = 'range of scores obtained',
+       subtitle = 'fire spreading in 4/8 directions') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        axis.title.x = element_blank(),
+        panel.border = element_rect(colour = 'lightgrey',
+                                    fill = NA),
+        axis.text.x = element_text(angle = 90))
+
+ggsave('figures/fire_errors_algorithm_directions.pdf',
+       height = 15, width = 20, unit = 'cm')
+
+# for density, plot: perc_density_correct, perc_correct_cat_density, RMSE_density, point_pred_performance_density
+metric_labs_density <- c(
+  'perc_density_correct' =
+    '% correctly estimated \n density parameters',
+  'perc_correct_cat_density' =
+    '% density parameters estimated \n within 10% of true parameter',
+  'RMSE_density' = 'RMSE',
+  'point_pred_performance_density' = 'point prediction \n performance')
+  
+errors_algorithms_density <- errors %>%
+  select(c(algorithm, perc_density_correct,
+           perc_correct_cat_density, RMSE_density,
+           point_pred_performance_density)) %>%
+  mutate(algorithm = ifelse(algorithm == 'PLS',
+                            'Partial Least Squares',
+                            algorithm)) %>%
+  pivot_longer(cols = c('perc_density_correct',
+                        'perc_correct_cat_density',
+                        'RMSE_density',
+                        'point_pred_performance_density'),
+               names_to = 'metric',
+               values_to = 'value') %>%
+  ggplot(mapping = aes(x = fct_relevel(algorithm,
+                                       'Linear Regression',
+                                       'Partial Least Squares',
+                                       'Random Forest',
+                                       'Multivariate Random Forest'),
+                       y = value)) +
+  geom_boxplot() +
+  facet_wrap(~ metric, scales = 'free_y',
+             labeller = labeller(metric = metric_labs_density)) +
+  labs(x = NULL,
+       y = 'range of scores obtained',
+       subtitle = 'density') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        axis.title.x = element_blank(),
+        panel.border = element_rect(colour = 'lightgrey',
+                                    fill = NA),
+        axis.text.x = element_text(angle = 90))
+ 
+ggsave('figures/fire_errors_algorithm_density.pdf',
+       height = 15, width = 20, unit = 'cm')
+```
+
+Plot metrics for each dataset:
+```{r}
+# for directions
+errors_data_directions <- errors %>%
+  select(c(noise, datapoints, summarise_runs,
+           perc_directions_correct,
+           directions_kappa, directions_f1, directions_mcc)) %>%
+  mutate(summarise_runs = ifelse(summarise_runs == 'full',
+                                   'not summarised',
+                                   summarise_runs)) %>%
+  pivot_longer(cols = c('perc_directions_correct',
+                        'directions_kappa',
+                        'directions_f1',
+                        'directions_mcc'),
+               names_to = 'metric',
+               values_to = 'value') %>%
+  ggplot(mapping = aes(x = fct_relevel(noise,
+                                       'clean',
+                                       'noise'),
+                       y = value,
+                       fill = summarise_runs)) +
+  geom_boxplot() +
+  facet_wrap(metric ~ datapoints, scales = 'free_y', ncol = 2,
+             labeller = labeller(metric = metric_labs_directions)) +
+  labs(x = NULL,
+       y = 'range of scores obtained',
+       subtitle = 'fire spreading in 4/8 directions',
+       fill = 'repeated runs \n summarised y/n') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        axis.title.x = element_blank(),
+        panel.border = element_rect(colour = 'lightgrey',
+                                    fill = NA),
+        axis.text.x = element_text(angle = 90))
+
+ggsave('figures/fire_errors_data_directions.pdf',
+       height = 30, width = 20, unit = 'cm')
+
+# for density
+errors_data_density <- errors %>%
+  select(c(noise, datapoints,
+           summarise_runs, perc_density_correct,
+           perc_correct_cat_density, RMSE_density,
+           point_pred_performance_density)) %>%
+  mutate(summarise_runs = ifelse(summarise_runs == 'full',
+                                   'not summarised',
+                                   summarise_runs)) %>%
+  pivot_longer(cols = c('perc_density_correct',
+                        'perc_correct_cat_density',
+                        'RMSE_density',
+                        'point_pred_performance_density'),
+               names_to = 'metric',
+               values_to = 'value') %>%
+  ggplot(mapping = aes(x = fct_relevel(noise,
+                                       'clean',
+                                       'noise'),
+                       y = value,
+                       fill = summarise_runs)) +
+  geom_boxplot() +
+  facet_wrap(metric ~ datapoints, scales = 'free_y', ncol = 2,
+             labeller = labeller(metric = metric_labs_density)) +
+  labs(x = NULL,
+       y = 'range of scores obtained',
+       subtitle = 'density',
+       fill = 'repeated runs \n summarised y/n') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        axis.title.x = element_blank(),
+        panel.border = element_rect(colour = 'lightgrey',
+                                    fill = NA),
+        axis.text.x = element_text(angle = 90))
+ 
+ggsave('figures/fire_errors_data_density.pdf',
+       height = 30, width = 20, unit = 'cm')
+```
+
+Now, for each error metric, retrieve the best, worst, and average performance per algorithm, and its noise, datapoints, and run summarisation characteristics.
+```{r}
+RetrievePerformancesAlgorithms <- function(errors, metrics){
+  # errors: data frame with error measurements
+  # metrics: list of metrics for which to compute performances
+  
+  errors_return <- tibble(algorithm = character(),
+                          datapoints = character(),
+                          noise = character(),
+                          summarise_runs = character(),
+                          statistic = character(),
+                          value = numeric(),
+                          metric = character())
+  
+  for(metric in metrics){
+    # compute mean performance for each of the algorithms
+    mean_performance <- errors %>%
+      group_by(algorithm) %>%
+      select(all_of(metric), algorithm) %>%
+      mutate(mean = mean(get(metric))) %>%
+      select(- 1) %>%
+      distinct() %>%
+      mutate(statistic = 'mean',
+             datapoints = '-',
+             noise = '-',
+             summarise_runs = '-',
+             metric = metric) %>%
+      rename(value = mean)
+    
+    errors_add <- errors %>%
+      select(all_of(metric), algorithm, datapoints, noise,
+             summarise_runs) %>%
+      # retrieve maximum per algorithm
+      group_by(algorithm) %>%
+      mutate(max = max(get(metric)),
+             min = min(get(metric)),
+             mean = mean(get(metric))) %>%
+      mutate(keep = ifelse(get(metric) == min, 'min',
+                           ifelse(get(metric) == max, 'max',
+                                  '-'))) %>%
+      pivot_longer(cols = c(max, min, mean),
+                   names_to = 'statistic',
+                   values_to = 'value') %>%
+      # keep only the data that produced the min and max values
+      filter(keep %in% c('min', 'max'),
+             keep == statistic) %>%
+      select(- 1) %>%
+      distinct() %>%
+      select(- keep) %>%
+      mutate(metric = metric)
+    
+    errors_return <- errors_return %>%
+      add_row(errors_add) %>%
+      add_row(mean_performance)
+  }
+
+  return(errors_return)
+}
+```
+
+Compute:
+```{r}
+metrics_vector <- c('perc_correct_params',
+                    'perc_density_correct',
+                    'perc_directions_correct',
+                    'perc_correct_cat_density',
+                    'RMSE_density',
+                    'NRMSE_density',
+                    'point_pred_performance_density',
+                    'directions_kappa',
+                    'directions_f1',
+                    'directions_mcc')
+
+errors_performance_algorithms <- 
+  RetrievePerformancesAlgorithms(errors,
+                                 metrics = metrics_vector)
+```
+
+Now, for each dataset, retrieve the best, worst, and average performance and the corresponding algorithm.
+```{r}
+RetrievePerformancesData <- function(errors, metrics){
+  # errors: data frame with error measurements
+  # metrics: list of metrics for which to compute performances
+  
+  errors_return <- tibble(datapoints = character(),
+                          noise = character(),
+                          summarise_runs = character(),
+                          statistic = character(),
+                          value = numeric(),
+                          metric = character())
+  
+  # for each metric
+  for(metric in metrics){
+    errors_add <- errors %>%
+      # select relevant data
+      select(all_of(metric), datapoints, noise,
+             summarise_runs) %>%
+      # group by variables that define the data sets
+      group_by(datapoints, summarise_runs, noise) %>%
+      # compute min, max, and mean of the metric
+      mutate(max = max(get(metric)),
+             min = min(get(metric)),
+             mean = mean(get(metric))) %>%
+      select(- 1) %>%
+      distinct() %>%
+      pivot_longer(cols = c(max, min, mean),
+                   names_to = 'statistic',
+                   values_to = 'value') %>%
+      mutate(metric = metric)
+    
+    errors_return <- errors_return %>%
+      add_row(errors_add)
+  }
+ return(errors_return)
+}
+```
+
+Compute:
+```{r}
+errors_performance_data <- RetrievePerformancesData(errors,
+                                                    metrics =
+                                                      metrics_vector)
+```
+
+# Plotted comparions
+Plot metrics for each method:
+```{r}
+errors_performance_algorithms %>%
+  ggplot(mapping = aes(x = factor(statistic,
+                                  level = c('min', 'mean', 'max')),
+                       y = value, fill = algorithm)) +
+  geom_bar(stat = 'identity',
+             position = position_dodge()) +
+  facet_wrap(~ metric,
+             scales = 'free_y') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        axis.title.x = element_blank())
+
+ggsave('figures/fire_errors_algorithm.pdf')
+```
+
+Plot metrics for each dataset:
+```{r}
+errors_performance_data %>%
+  ggplot(mapping = aes(x = factor(statistic,
+                                  level = c('min', 'mean', 'max')),
+                       y = value, fill = noise)) +
+  geom_bar(stat = 'identity',
+           position = position_dodge()) +
+  facet_wrap( ~ metric,
+             scales = 'free_y') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        axis.title.x = element_blank())
+
+ggsave('figures/fire_errors_noise.pdf')
+
+errors_performance_data %>%
+  ggplot(mapping = aes(x = factor(statistic,
+                                  level = c('min', 'mean', 'max')),
+                       y = value, fill = datapoints)) +
+  geom_bar(stat = 'identity',
+           position = position_dodge()) +
+  facet_wrap( ~ metric,
+             scales = 'free_y') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        axis.title.x = element_blank())
+
+ggsave('figures/fire_errors_datapoints.pdf')
+
+errors_performance_data %>%
+  ggplot(mapping = aes(x = factor(statistic,
+                                  level = c('min', 'mean', 'max')),
+                       y = value, fill = summarise_runs)) +
+  geom_bar(stat = 'identity',
+           position = position_dodge()) +
+  facet_wrap( ~ metric,
+             scales = 'free_y') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        axis.title.x = element_blank()) +
+  labs(fill = 'summarised runs y/n')
+
+ggsave('figures/fire_errors_summariseruns.pdf')
+```
+
+# Which method performs best for each parameter
+Here I compute which method performs best for each error measure.
+```{r}
+# tibble to store error measure, best method, sample size, inclusion of ticks, and actual value
+all_best <- tibble(metric = character(),
+                   score = numeric(),
+                   algorithm = character(),
+                   datapoints = character(),
+                   noise = character(),
+                   summarise_runs = character())
+
+# for each error measures
+for(metric in metrics_vector){
+  # if RMSE we want to look at the minimum score
+  if(metric == 'RMSE_density'){
+    winner <- errors %>%
+      # find the algorithm / data combination that produced
+      #   the best score
+      mutate(min = min(get(metric))) %>%
+      filter(get(metric) == min) %>%
+      mutate(metric = metric,
+             score = get(metric)) %>%
+      select(metric, score, algorithm, datapoints,
+             noise, summarise_runs)
+  # otherwise we will look at the maximum score
+  } else{
+    winner <- errors %>%
+      mutate(max = max(get(metric))) %>%
+      filter(get(metric) == max) %>%
+      mutate(metric = metric,
+             score = get(metric)) %>%
+      select(metric, score, algorithm, datapoints,
+             noise, summarise_runs)
+  }
+  # save best score
+  all_best <- all_best %>%
+    add_row(winner)
+}
+```
+
+For density, see which method performs best:
+(I'm only including the RMSE and not the NRMSE because the NRMSE is calculated from the RMSE).
+```{r}
+all_best %>%
+  # find metics for density
+  filter(metric %in% c('perc_density_correct',
+                       'perc_correct_cat_density',
+                       'RMSE_density',
+                       'point_pred_performance_density')) %>%
+  # per method
+  group_by(algorithm) %>%
+  # remove duplicates where a method performs 'best' for the same metric twice
+  distinct(metric, algorithm) %>%
+  # count how many times each method performs best
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+For directions, see which method performs best:
+```{r}
+all_best %>%
+  filter(metric %in% c('directions_kappa',
+                       'directions_f1',
+                       'directions_mcc',
+                       'perc_directions_correct')) %>%
+  group_by(algorithm) %>%
+  distinct(metric, algorithm) %>%
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+For burn percentage, see which method performs best:
+```{r}
+all_best %>%
+  filter(metric %in% c('RMSE_burn')) %>%
+  group_by(algorithm) %>%
+  distinct(metric, algorithm) %>%
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+Which method guesses most parameters correctly:
+```{r}
+all_best %>%
+  filter(metric %in% c('perc_correct_params')) %>%
+  group_by(algorithm) %>%
+  distinct(metric, algorithm) %>%
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+# Makes fewest mistakes overall
+I rank the methods based on their performance for each metric (best ranks 1, second best ranks 2, etc.). Then I add up all the scores, the one with the lowest score performs the best overall.
+To make this a fair comparison, I use 4 error metrics for both directions and density. Methods that do really well on just the burn percentage are now at a distadvantage because there is only 1 metric for that.
+```{r}
+methods_ranking <- tibble(algorithm = character(),
+                          rank_score = numeric())
+
+for(metric in metrics_vector){
+  # if metric is RMSE, then lower = better
+  if(metric == 'RMSE_density'){
+    add_ranks <- errors %>%
+      group_by(algorithm) %>%
+      mutate(best = min(get(metric))) %>%
+      filter(get(metric) == best) %>%
+      select(c(algorithm, all_of(metric))) %>%
+      ungroup() %>%
+      mutate(rank = dense_rank(get(metric))) %>%
+      select(c(algorithm, rank)) %>%
+      distinct(algorithm, rank)
+  # otherwise, select for max score
+  } else{
+    add_ranks <- errors %>%
+      group_by(algorithm) %>%
+      mutate(best = max(get(metric))) %>%
+      filter(get(metric) == best) %>%
+      select(c(algorithm, all_of(metric))) %>%
+      ungroup() %>%
+      mutate(rank = dense_rank(desc(get(metric)))) %>%
+      select(c(algorithm, rank)) %>%
+      distinct(algorithm, rank)
+  }
+  
+  # add ranks to data frame
+  methods_ranking <- methods_ranking %>%
+    bind_rows(add_ranks)
+}
+
+methods_ranking <- methods_ranking %>%
+  # per method
+  group_by(algorithm) %>%
+  # add the ranks over all the metrics together
+  summarise(rank_score = sum(rank)) %>%
+  # display in ascending order (lower score = better)
+  arrange(rank_score)
+```
+
+# Averaged across datasets.
+All comparisons above rely on selecting the optimal dataset. Here, I average the performance of each algorithm over all datasets and then see which one is best that way.
+
+First, I make a new dataframe with the performances averaged over the datasets:
+```{r}
+errors_average_algorithm <- errors %>%
+  group_by(algorithm) %>%
+  summarise_at(vars(metrics_vector), mean)
+```
+
+Now compute which method performs best for each error measure
+```{r}
+# tibble to store error measure, value, and best algorithm
+average_best_algorithm <- tibble(metric = character(),
+                                 algorithm = character(),
+                                 value = numeric())
+
+# for each error measure
+for(metric in metrics_vector){
+  # for RMSE
+  if(metric == 'RMSE_density'){
+    winner <- errors_average_algorithm %>%
+      # find the maximum score
+      mutate(min = min(get(metric))) %>%
+      # keep only the maximum score
+      filter(min == get(metric)) %>%
+      # store in appropriate format
+      mutate(metric = metric,
+             value = get(metric)) %>%
+      select(c(metric, value, algorithm))
+  # if not RMSE  
+  } else{
+    winner <- errors_average_algorithm %>%
+      # find the maximum score
+      mutate(max = max(get(metric))) %>%
+      # keep only the maximum score
+      filter(max == get(metric)) %>%
+      # store in appropriate format
+      mutate(metric = metric,
+             value = get(metric)) %>%
+      select(c(metric, value, algorithm))
+  }
+  # add to tibble
+  average_best_algorithm <- average_best_algorithm %>%
+    add_row(winner)
+}
+```
+
+For density, see which method performs best on average:
+```{r}
+average_best_algorithm %>%
+  # find metics for density
+  filter(metric %in% c('perc_density_correct',
+                       'perc_correct_cat_density',
+                       'RMSE_density',
+                       'point_pred_performance_density')) %>%
+  # per method
+  group_by(algorithm) %>%
+  # count how many times each method performs best
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+For directions, see which method performs best:
+```{r}
+average_best_algorithm %>%
+  filter(metric %in% c('directions_kappa',
+                       'directions_f1',
+                       'directions_mcc',
+                       'perc_directions_correct')) %>%
+  group_by(algorithm) %>%
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+For burn percentage, see which method performs best:
+```{r}
+# add later
+```
+
+Which method guesses most parameters correctly:
+```{r}
+average_best_algorithm %>%
+  filter(metric %in% c('perc_correct_params')) %>%
+  group_by(algorithm) %>%
+  distinct(metric, algorithm) %>%
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+Ranking similar to how it works for the non-averaged version.
+I rank the methods based on their performance for each metric (best ranks 1, second best ranks 2, etc.). Then I add up all the scores, the one with the lowest score performs the best overall.
+To make this a fair comparison, I use 4 error metrics for both directions and density. Methods that do really well on just the burn percentage are now at a distadvantage because there is only 1 metric for that.
+```{r}
+methods_ranking_average_algorithm <- tibble(algorithm = character(),
+                                            rank_score = numeric())
+
+for(metric in metrics_vector){
+  # if metric is RMSE, then lower = better
+  if(metric == 'RMSE_density'){
+    add_ranks <- errors_average_algorithm %>%
+      mutate(rank = dense_rank(get(metric))) %>%
+      select(c(algorithm, rank)) %>%
+      distinct(algorithm, rank)
+  # otherwise, select for max score
+  } else{
+    add_ranks <- errors_average_algorithm %>%
+      mutate(rank = dense_rank(desc(get(metric)))) %>%
+      select(c(algorithm, rank)) %>%
+      distinct(algorithm, rank)
+  }
+  
+  # add ranks to data frame
+  methods_ranking_average_algorithm <-
+    methods_ranking_average_algorithm %>%
+    bind_rows(add_ranks)
+}
+
+methods_ranking_average_algorithm <-
+  methods_ranking_average_algorithm %>%
+  # per algorithm
+  group_by(algorithm) %>%
+  # add the ranks over all the metrics together
+  summarise(rank_score = sum(rank)) %>%
+  # display in ascending order (lower score = better)
+  arrange(rank_score)
+
+View(methods_ranking_average_algorithm)
+```
+
+# Averaged across algorithms
+All comparisons above rely on selecting the optimal algorithm. Here, I average the performance of each dataset over all algorithms and then see which one is best that way.
+
+First, I make a new dataframe with the performances averaged over the algorithms:
+```{r}
+errors_average_data <- errors %>%
+  group_by(datapoints, noise, summarise_runs) %>%
+  summarise_at(vars(metrics_vector), mean) %>%
+  unite('dataset', c(datapoints, noise, summarise_runs),
+        sep = '_')
+```
+
+Now compute which method performs best for each error measure
+```{r}
+# tibble to store error measure, value, and best dataset
+average_best_data <- tibble(metric = character(),
+                            dataset = character(),
+                            value = numeric())
+
+# for each error measure
+for(metric in metrics_vector){
+  # for RMSE
+  if(metric == 'RMSE_density'){
+    winner <- errors_average_data %>%
+      # find the maximum score
+      mutate(min = min(get(metric))) %>%
+      # keep only the maximum score
+      filter(min == get(metric)) %>%
+      # store in appropriate format
+      mutate(metric = metric,
+             value = get(metric)) %>%
+      select(c(metric, value, dataset))
+  # if not RMSE  
+  } else{
+    winner <- errors_average_data %>%
+      # find the maximum score
+      mutate(max = max(get(metric))) %>%
+      # keep only the maximum score
+      filter(max == get(metric)) %>%
+      # store in appropriate format
+      mutate(metric = metric,
+             value = get(metric)) %>%
+      select(c(metric, value, dataset))
+  }
+  # add to tibble
+  average_best_data <- average_best_data %>%
+    add_row(winner)
+}
+```
+
+For density, see which method performs best on average:
+```{r}
+average_best_data %>%
+  # find metics for density
+  filter(metric %in% c('perc_density_correct',
+                       'perc_correct_cat_density',
+                       'RMSE_density',
+                       'point_pred_performance_density')) %>%
+  # per method
+  group_by(dataset) %>%
+  # count how many times each method performs best
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+For directions, see which method performs best:
+```{r}
+average_best_data %>%
+  filter(metric %in% c('directions_kappa',
+                       'directions_f1',
+                       'directions_mcc',
+                       'perc_directions_correct')) %>%
+  group_by(dataset) %>%
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+For burn percentage, see which method performs best:
+```{r}
+# add later
+```
+
+Which method guesses most parameters correctly:
+```{r}
+average_best_data %>%
+  filter(metric %in% c('perc_correct_params')) %>%
+  group_by(dataset) %>%
+  distinct(metric, dataset) %>%
+  summarise(n = n()) %>%
+  arrange(- n)
+```
+
+Ranking similar to how it works for the non-averaged version.
+I rank the methods based on their performance for each metric (best ranks 1, second best ranks 2, etc.). Then I add up all the scores, the one with the lowest score performs the best overall.
+To make this a fair comparison, I use 4 error metrics for both directions and density. Methods that do really well on just the burn percentage are now at a distadvantage because there is only 1 metric for that.
+```{r}
+methods_ranking_average_data <- tibble(dataset = character(),
+                                       rank_score = numeric())
+
+for(metric in metrics_vector){
+  # if metric is RMSE, then lower = better
+  if(metric == 'RMSE_density'){
+    add_ranks <- errors_average_data %>%
+      mutate(rank = dense_rank(get(metric))) %>%
+      select(c(dataset, rank)) %>%
+      distinct(dataset, rank)
+  # otherwise, select for max score
+  } else{
+    add_ranks <- errors_average_data %>%
+      mutate(rank = dense_rank(desc(get(metric)))) %>%
+      select(c(dataset, rank)) %>%
+      distinct(dataset, rank)
+  }
+  
+  # add ranks to data frame
+  methods_ranking_average_data <- methods_ranking_average_data %>%
+    bind_rows(add_ranks)
+}
+
+methods_ranking_average_data <-
+  methods_ranking_average_data %>%
+  # per algorithm
+  group_by(dataset) %>%
+  # add the ranks over all the metrics together
+  summarise(rank_score = sum(rank)) %>%
+  # display in ascending order (lower score = better)
+  arrange(rank_score)
+
+View(methods_ranking_average_data)
+```
